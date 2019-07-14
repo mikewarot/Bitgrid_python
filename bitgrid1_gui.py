@@ -50,6 +50,46 @@ class MyFrame1 ( wx.Frame ):
 
         self.SetMenuBar( self.m_menubar2 )
 
+        gbSizer1 = wx.GridBagSizer( 0, 0 )
+        gbSizer1.SetFlexibleDirection( wx.BOTH )
+        gbSizer1.SetNonFlexibleGrowMode( wx.FLEX_GROWMODE_SPECIFIED )
+
+        self.inLeft = wx.ToggleButton( self, wx.ID_ANY, u"Toggle me!", wx.DefaultPosition, wx.DefaultSize, 0 )
+        self.inLeft.SetValue( True )
+        gbSizer1.Add( self.inLeft, wx.GBPosition( 2, 0 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+        self.inUp = wx.ToggleButton( self, wx.ID_ANY, u"Toggle me!", wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.inUp, wx.GBPosition( 1, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+        self.InRight = wx.ToggleButton( self, wx.ID_ANY, u"Toggle me!", wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.InRight, wx.GBPosition( 2, 2 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+        self.inDown = wx.ToggleButton( self, wx.ID_ANY, u"Toggle me!", wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.inDown, wx.GBPosition( 3, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+        self.m_staticText2 = wx.StaticText( self, wx.ID_ANY, u"MyLabel", wx.DefaultPosition, wx.DefaultSize, 0 )
+        self.m_staticText2.Wrap( -1 )
+
+        gbSizer1.Add( self.m_staticText2, wx.GBPosition( 5, 0 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+        self.m_textCtrl1 = wx.TextCtrl( self, wx.ID_ANY, wx.EmptyString, wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.m_textCtrl1, wx.GBPosition( 5, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+        self.outUp = wx.CheckBox( self, wx.ID_ANY, u"Check Me!", wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.outUp, wx.GBPosition( 8, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+        self.outDown = wx.CheckBox( self, wx.ID_ANY, u"Check Me!", wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.outDown, wx.GBPosition( 10, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+        self.outLeft = wx.CheckBox( self, wx.ID_ANY, u"Check Me!", wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.outLeft, wx.GBPosition( 9, 0 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+        self.outRight = wx.CheckBox( self, wx.ID_ANY, u"Check Me!", wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.outRight, wx.GBPosition( 9, 2 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+
+
+        self.SetSizer( gbSizer1 )
+        self.Layout()
 
         self.Centre( wx.BOTH )
 
