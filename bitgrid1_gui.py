@@ -101,6 +101,10 @@ class MyFrame1 ( wx.Frame ):
         self.inUp.Bind( wx.EVT_TOGGLEBUTTON, self.UpdateInputs )
         self.inRight.Bind( wx.EVT_TOGGLEBUTTON, self.UpdateInputs )
         self.inDown.Bind( wx.EVT_TOGGLEBUTTON, self.UpdateInputs )
+        self.outUp.Bind( wx.EVT_CHECKBOX, self.outChanged )
+        self.outDown.Bind( wx.EVT_CHECKBOX, self.outChanged )
+        self.outLeft.Bind( wx.EVT_CHECKBOX, self.outChanged )
+        self.outRight.Bind( wx.EVT_CHECKBOX, self.outChanged )
 
     def __del__( self ):
         pass
@@ -114,6 +118,12 @@ class MyFrame1 ( wx.Frame ):
         event.Skip()
 
     def UpdateInputs( self, event ):
+        event.Skip()
+
+
+
+
+    def outChanged( self, event ):
         event.Skip()
 
 

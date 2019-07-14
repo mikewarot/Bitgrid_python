@@ -40,6 +40,23 @@ class OurFrame(bitgrid1_gui.MyFrame1):
         self.outLeft.SetValue(outputvalue & 4)
         self.outRight.SetValue(outputvalue & 2)
         self.outDown.SetValue(outputvalue & 1)
+
+    #if the outputs are changed by the user... change the program to match
+    def outChanged(self, event):
+        print("user forced output changes, updating program")
+        inputvalue = 0
+        if self.inUp.GetValue():    inputvalue = inputvalue + 8
+        if self.inLeft.GetValue():  inputvalue = inputvalue + 4
+        if self.inRight.GetValue(): inputvalue = inputvalue + 2
+        if self.inDown.GetValue():  inputvalue = inputvalue + 1
+        outputvalue = 0
+        if self.outUp.GetValue():     outputvalue = outputvalue + 8
+        if self.outLeft.GetValue():   outputvalue = outputvalue + 4
+        if self.outRight.GetValue():  outputvalue = outputvalue + 2
+        if self.outDown.GetValue():   outputvalue = outputvalue + 1
+        self.cellHex.SetSelection(inputvalue,inputvalue+1)
+        self.cellHex.WriteText("%0.1x"%outputvalue)
+        self.cellHex.SetFocus()
         
         
         
