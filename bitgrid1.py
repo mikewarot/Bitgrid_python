@@ -21,6 +21,19 @@ class OurFrame(bitgrid1_gui.MyFrame1):
         helpdialog = OurHelp(None)
         helpdialog.ShowModal()
 
+    #update the inputs
+    def UpdateInputs(self, event):
+        print("updating inputs")
+        programcode = self.cellHex.GetLineText(0)
+        inputvalue = 0
+        if self.inUp.GetValue():    inputvalue = inputvalue + 8
+        if self.inLeft.GetValue():  inputvalue = inputvalue + 4
+        if self.inRight.GetValue(): inputvalue = inputvalue + 2
+        if self.inDown.GetValue():  inputvalue = inputvalue + 1
+        print("Input value %0.1x"%inputvalue)
+        print("Program %s"%programcode)
+        
+
 class OurHelp(bitgrid1_gui.AboutBox):
     #constructor
     def __init__(self,parent):

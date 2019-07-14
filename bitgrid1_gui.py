@@ -58,10 +58,12 @@ class MyFrame1 ( wx.Frame ):
         gbSizer1.Add( self.inLeft, wx.GBPosition( 2, 0 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
 
         self.inUp = wx.ToggleButton( self, wx.ID_ANY, u"Up Input", wx.DefaultPosition, wx.DefaultSize, 0 )
+        self.inUp.SetFont( wx.Font( wx.NORMAL_FONT.GetPointSize(), wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL, False, wx.EmptyString ) )
+
         gbSizer1.Add( self.inUp, wx.GBPosition( 1, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
 
-        self.InRight = wx.ToggleButton( self, wx.ID_ANY, u"Right Input", wx.DefaultPosition, wx.DefaultSize, 0 )
-        gbSizer1.Add( self.InRight, wx.GBPosition( 2, 2 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+        self.inRight = wx.ToggleButton( self, wx.ID_ANY, u"Right Input", wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.inRight, wx.GBPosition( 2, 2 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
 
         self.inDown = wx.ToggleButton( self, wx.ID_ANY, u"Down Input", wx.DefaultPosition, wx.DefaultSize, 0 )
         gbSizer1.Add( self.inDown, wx.GBPosition( 3, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
@@ -71,8 +73,8 @@ class MyFrame1 ( wx.Frame ):
 
         gbSizer1.Add( self.m_staticText2, wx.GBPosition( 5, 0 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
 
-        self.m_textCtrl1 = wx.TextCtrl( self, wx.ID_ANY, wx.EmptyString, wx.DefaultPosition, wx.DefaultSize, 0 )
-        gbSizer1.Add( self.m_textCtrl1, wx.GBPosition( 5, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
+        self.cellHex = wx.TextCtrl( self, wx.ID_ANY, u"0123456789abcdef", wx.DefaultPosition, wx.DefaultSize, 0 )
+        gbSizer1.Add( self.cellHex, wx.GBPosition( 5, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
 
         self.outUp = wx.CheckBox( self, wx.ID_ANY, u"Up Output", wx.DefaultPosition, wx.DefaultSize, 0 )
         gbSizer1.Add( self.outUp, wx.GBPosition( 8, 1 ), wx.GBSpan( 1, 1 ), wx.ALL, 5 )
@@ -95,6 +97,10 @@ class MyFrame1 ( wx.Frame ):
         # Connect Events
         self.Bind( wx.EVT_MENU, self.ByeBye, id = self.m_menuItem8.GetId() )
         self.Bind( wx.EVT_MENU, self.ShowHelp, id = self.m_menuItem9.GetId() )
+        self.inLeft.Bind( wx.EVT_TOGGLEBUTTON, self.UpdateInputs )
+        self.inUp.Bind( wx.EVT_TOGGLEBUTTON, self.UpdateInputs )
+        self.inRight.Bind( wx.EVT_TOGGLEBUTTON, self.UpdateInputs )
+        self.inDown.Bind( wx.EVT_TOGGLEBUTTON, self.UpdateInputs )
 
     def __del__( self ):
         pass
@@ -106,6 +112,12 @@ class MyFrame1 ( wx.Frame ):
 
     def ShowHelp( self, event ):
         event.Skip()
+
+    def UpdateInputs( self, event ):
+        event.Skip()
+
+
+
 
 
 ###########################################################################
