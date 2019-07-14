@@ -34,6 +34,14 @@ class OurFrame(bitgrid1_gui.MyFrame1):
         self.cellHex.SetFocus()
         print("Input value %0.1x"%inputvalue)
         print("Program %s"%programcode)
+        outputvalue = int(programcode[inputvalue:inputvalue+1],16)
+        print("Output value %0.1x"%outputvalue)
+        self.outUp.SetValue(outputvalue & 8) 
+        self.outLeft.SetValue(outputvalue & 4)
+        self.outRight.SetValue(outputvalue & 2)
+        self.outDown.SetValue(outputvalue & 1)
+        
+        
         
 
 class OurHelp(bitgrid1_gui.AboutBox):
