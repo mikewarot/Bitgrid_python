@@ -30,6 +30,8 @@ class OurFrame(bitgrid1_gui.MyFrame1):
         if self.inLeft.GetValue():  inputvalue = inputvalue + 4
         if self.inRight.GetValue(): inputvalue = inputvalue + 2
         if self.inDown.GetValue():  inputvalue = inputvalue + 1
+        self.cellHex.SetSelection(inputvalue,inputvalue+1)
+        self.cellHex.SetFocus()
         print("Input value %0.1x"%inputvalue)
         print("Program %s"%programcode)
         
