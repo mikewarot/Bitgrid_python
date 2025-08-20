@@ -17,7 +17,7 @@ class Mapper:
         self.H = grid_height
 
     def map(self, g: Graph) -> Program:
-        topo = self._topo_order(g)
+        # readiness-based scheduling rather than strict topo to avoid corner cases
         col = 0
         cells: List[Cell] = []
         bit_sources: Dict[str, List[Dict]] = {}  # node_id -> per-bit source descriptor
@@ -26,122 +26,167 @@ class Mapper:
         for name, sig in g.inputs.items():
             bit_sources[name] = [{"type": "input", "name": name, "bit": b} for b in range(sig.width)]
 
-        col = 1
-        for nid in topo:
-            node = g.nodes[nid]
-            if node.op in ('INPUT',):
-                continue
+        # Preload constants
+        for nid, node in g.nodes.items():
             if node.op == 'CONST':
-                mask = (1 << node.width) - 1 if node.width < 63 else (1 << 63) - 1  # avoid huge shift
+                mask = (1 << node.width) - 1 if node.width < 63 else (1 << 63) - 1
                 val = int(node.params['value'])
                 if node.width < 63:
                     val = val & mask
                 bits = [((val >> b) & 1) for b in range(node.width)]
                 bit_sources[nid] = [{"type": "const", "value": bits[b]} for b in range(node.width)]
-                continue
-            if node.op == 'OUTPUT':
-                src = node.inputs[0]
-                bit_sources[nid] = bit_sources[src][:g.outputs[nid].width]
-                continue
 
-            # place a column for this node
-            if col >= self.W:
-                raise RuntimeError('Grid too narrow for mapping')
-
-            if node.op in ('AND','OR','XOR','NOT','SHL','SHR','SAR','BIT'):
-                ins = [bit_sources[node.inputs[0]]]
-                if node.op not in ('NOT','BIT'):
-                    ins.append(bit_sources[node.inputs[1]])
-                width = node.width
-                node_bits: List[Dict] = []
-                for b in range(width):
-                    # Apply shift to left operand for SHL/SHR (left shift moves bits up index)
-                    if node.op == 'BIT':
-                        idx = int(node.params.get('index', 0))
-                        src_bits = ins[0]
-                        a_src = src_bits[idx] if 0 <= idx < len(src_bits) else {"type": "const", "value": 0}
+        remaining = [nid for nid in g.nodes.keys() if g.nodes[nid].op not in ('INPUT','CONST')]
+        col = 1
+        max_iters = len(remaining) * 2 + 1000
+        iters = 0
+        while remaining and iters < max_iters:
+            iters += 1
+            progressed = False
+            for nid in list(remaining):
+                node = g.nodes[nid]
+                if node.op in ('INPUT',):
+                    remaining.remove(nid)
+                    progressed = True
+                    continue
+                if node.op == 'OUTPUT':
+                    src = node.inputs[0]
+                    if src in bit_sources:
+                        bit_sources[nid] = bit_sources[src][:g.outputs[nid].width]
+                        remaining.remove(nid)
+                        progressed = True
+                        continue
                     else:
-                        a_shift = 0
-                        if node.op in ('SHL','SHR','SAR'):
-                            amount = int(node.params.get('amount', 0))
-                            # For output bit b, source index j = b - amount for SHL; j = b + amount for SHR
-                            if node.op == 'SHL':
-                                a_shift = amount
-                            elif node.op in ('SHR','SAR'):
-                                a_shift = -amount
-                        pad = 'zero'
-                        if node.op == 'SAR':
-                            pad = 'sign'
-                        a_src = self._shifted(ins[0], b, a_shift, width, node, pad)
-                    b_src = None
-                    if node.op not in ('NOT','BIT') and len(ins) > 1:
-                        # For non-shift ops, use right operand as-is
-                        if node.op not in ('SHL','SHR','SAR'):
-                            if len(ins[1]) == 1:
-                                if node.op in ('AND','OR','XOR'):
-                                    # broadcast logic ops
-                                    b_src = ins[1][0]
-                                elif node.op == 'ADD':
-                                    # only add to bit 0
-                                    b_src = ins[1][0] if b == 0 else {"type": "const", "value": 0}
+                        continue
+
+                # place a column for this node
+                if col >= self.W:
+                    raise RuntimeError('Grid too narrow for mapping')
+
+                # ensure all inputs available
+                ready = True
+                for iid in node.inputs:
+                    if iid not in bit_sources:
+                        ready = False
+                        break
+                if not ready:
+                    continue
+
+                if node.op in ('AND','OR','XOR','NOT','SHL','SHR','SAR','BIT'):
+                    ins = [bit_sources[node.inputs[0]]]
+                    if node.op not in ('NOT','BIT'):
+                        ins.append(bit_sources[node.inputs[1]])
+                    width = node.width
+                    node_bits: List[Dict] = []
+                    for b in range(width):
+                        # Apply shift to left operand for SHL/SHR (left shift moves bits up index)
+                        if node.op == 'BIT':
+                            idx = int(node.params.get('index', 0))
+                            src_bits = ins[0]
+                            a_src = src_bits[idx] if 0 <= idx < len(src_bits) else {"type": "const", "value": 0}
+                        else:
+                            a_shift = 0
+                            if node.op in ('SHL','SHR','SAR'):
+                                amount = int(node.params.get('amount', 0))
+                                # For output bit b, source index j = b - amount for SHL; j = b + amount for SHR
+                                if node.op == 'SHL':
+                                    a_shift = amount
+                                elif node.op in ('SHR','SAR'):
+                                    a_shift = -amount
+                            pad = 'zero'
+                            if node.op == 'SAR':
+                                pad = 'sign'
+                            a_src = self._shifted(ins[0], b, a_shift, width, node, pad)
+                        b_src = None
+                        if node.op not in ('NOT','BIT') and len(ins) > 1:
+                            # For non-shift ops, use right operand as-is
+                            if node.op not in ('SHL','SHR','SAR'):
+                                if len(ins[1]) == 1:
+                                    if node.op in ('AND','OR','XOR'):
+                                        # broadcast logic ops
+                                        b_src = ins[1][0]
+                                    elif node.op == 'ADD':
+                                        # only add to bit 0
+                                        b_src = ins[1][0] if b == 0 else {"type": "const", "value": 0}
+                                    else:
+                                        b_src = self._shifted(ins[1], b, 0, width, node)
                                 else:
                                     b_src = self._shifted(ins[1], b, 0, width, node)
-                            else:
-                                b_src = self._shifted(ins[1], b, 0, width, node)
-                    x, y = col, b
-                    in_list = [a_src, b_src or {"type": "const", "value": 0}, {"type": "const", "value": 0}, {"type": "const", "value": 0}]
-                    op = 'BUF'
-                    if node.op == 'NOT':
-                        op = 'NOT'
-                    elif node.op == 'AND':
-                        op = 'AND'
-                    elif node.op == 'OR':
-                        op = 'OR'
-                    elif node.op == 'XOR':
-                        op = 'XOR'
-                    elif node.op in ('SHL','SHR','SAR'):
-                        # already applied shift to a_src
+                        x, y = col, b
+                        in_list = [a_src, b_src or {"type": "const", "value": 0}, {"type": "const", "value": 0}, {"type": "const", "value": 0}]
                         op = 'BUF'
-                        in_list[0] = a_src
-                    elif node.op == 'BIT':
-                        op = 'BUF'
-                    cell = Cell(x=x, y=y, inputs=in_list, op=op, params={})
-                    cells.append(cell)
-                    node_bits.append({"type": "cell", "x": x, "y": y, "out": 0})
-                bit_sources[nid] = node_bits
-                col += 1
-                continue
+                        if node.op == 'NOT':
+                            op = 'NOT'
+                        elif node.op == 'AND':
+                            op = 'AND'
+                        elif node.op == 'OR':
+                            op = 'OR'
+                        elif node.op == 'XOR':
+                            op = 'XOR'
+                        elif node.op in ('SHL','SHR','SAR'):
+                            # already applied shift to a_src
+                            op = 'BUF'
+                            in_list[0] = a_src
+                        elif node.op == 'BIT':
+                            op = 'BUF'
+                        cell = Cell(x=x, y=y, inputs=in_list, op=op, params={})
+                        cells.append(cell)
+                        node_bits.append({"type": "cell", "x": x, "y": y, "out": 0})
+                    bit_sources[nid] = node_bits
+                    col += 1
+                    remaining.remove(nid)
+                    progressed = True
+                    continue
 
-            if node.op == 'ADD':
-                width = node.width
-                a_bits = bit_sources[node.inputs[0]]
-                b_bits = bit_sources[node.inputs[1]]
-                carry_in = {"type": "const", "value": 0}
-                node_bits: List[Dict] = []
-                for b in range(width):
-                    a_src = self._shifted(a_bits, b, 0, width, node)
-                    b_src = self._shifted(b_bits, b, 0, width, node)
-                    x, y = col, b
-                    in_list = [a_src, b_src, carry_in, {"type": "const", "value": 0}]
-                    cell = Cell(x=x, y=y, inputs=in_list, op='ADD_BIT', params={})
-                    cells.append(cell)
-                    sum_src = {"type": "cell", "x": x, "y": y, "out": 0}
-                    carry_out = {"type": "cell", "x": x, "y": y, "out": 1}
-                    node_bits.append(sum_src)
-                    carry_in = carry_out
-                bit_sources[nid] = node_bits
-                col += 1
-                continue
+                if node.op == 'ADD':
+                    width = node.width
+                    a_bits = bit_sources[node.inputs[0]]
+                    b_bits = bit_sources[node.inputs[1]]
+                    carry_in = {"type": "const", "value": 0}
+                    node_bits: List[Dict] = []
+                    for b in range(width):
+                        a_src = self._shifted(a_bits, b, 0, width, node)
+                        b_src = self._shifted(b_bits, b, 0, width, node)
+                        x, y = col, b
+                        in_list = [a_src, b_src, carry_in, {"type": "const", "value": 0}]
+                        cell = Cell(x=x, y=y, inputs=in_list, op='ADD_BIT', params={})
+                        cells.append(cell)
+                        sum_src = {"type": "cell", "x": x, "y": y, "out": 0}
+                        carry_out = {"type": "cell", "x": x, "y": y, "out": 1}
+                        node_bits.append(sum_src)
+                        carry_in = carry_out
+                    bit_sources[nid] = node_bits
+                    col += 1
+                    remaining.remove(nid)
+                    progressed = True
+                    continue
 
-            raise RuntimeError(f'Unsupported op in mapping: {node.op}')
+                raise RuntimeError(f'Unsupported op in mapping: {node.op}')
+
+            # end for each remaining
+            
+            # end iteration
+            if not progressed:
+                # no node was placed; break to avoid infinite loop
+                samples = []
+                for rid in remaining[:10]:
+                    rn = g.nodes[rid]
+                    missing = [iid for iid in rn.inputs if iid not in bit_sources]
+                    samples.append(f"{rid}({rn.op}) missing: {missing}")
+                unresolved = '; '.join(samples)
+                raise RuntimeError(f'Mapping stalled; unresolved nodes (sample): {unresolved}')
 
         width = max([c.x for c in cells], default=0) + 1
         height = max([c.y for c in cells], default=0) + 1
 
-        # outputs mapping
+        # outputs mapping (map directly from the source of OUTPUT nodes)
         output_bits: Dict[str, List[Dict]] = {}
         for name, sig in g.outputs.items():
-            src_bits = bit_sources[name]
+            out_node = g.nodes[name]
+            src = out_node.inputs[0] if out_node.inputs else name
+            src_bits = bit_sources.get(src)
+            if src_bits is None:
+                raise RuntimeError(f'Mapping error: missing bit sources for output source {src}')
             output_bits[name] = src_bits[:sig.width]
 
         # inputs mapping

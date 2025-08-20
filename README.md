@@ -63,6 +63,24 @@ python -m bitgrid.cli.run_emulator --program out/mul_program.json --inputs input
 ```
 
 ### Signed math examples
+### f32 (IEEE‑754) multiply (prototype)
+
+- Build and run f32 multiply (inputs/outputs as 32-bit integers in hex or decimal):
+
+```
+python -m bitgrid.cli.run_f32_mul --inputs inputs_f32_mul.csv --outputs out/f32_mul_results.csv
+```
+
+- Example `inputs_f32_mul.csv`:
+
+```
+a,b
+0x3F800000,0x40000000  # 1.0 * 2.0 = 2.0
+0x40400000,0x40400000  # 3.0 * 3.0 = 9.0
+```
+
+Notes: prototype handles normal numbers and zero, uses truncation rounding, and omits NaN/Inf/subnormals for now.
+
 
 - Signed multiply (two's complement):
 

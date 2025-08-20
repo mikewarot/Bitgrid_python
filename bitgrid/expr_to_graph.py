@@ -89,6 +89,11 @@ class ExprToGraph:
                 params['amount'] = rid_node.value
                 if op == 'SHR' and self.signed.get(left_id, False):
                     op = 'SAR'
+                # set width conservatively
+                if op == 'SHL':
+                    width = max(1, lw + int(params['amount']))
+                else:
+                    width = max(1, lw)
             if op == 'SUB':
                 # Lower to ADD with two's complement of right; extend width+1 for carry
                 width = max(lw, rw) + 1
