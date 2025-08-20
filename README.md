@@ -52,6 +52,11 @@ python -m bitgrid.cli.run_emulator --program out/program.json --inputs inputs.cs
 - `bitgrid/cli/compile_expr.py` — CLI to compile expression to graph/program.
 - `bitgrid/cli/run_emulator.py` — CLI to emulate with CSV I/O.
 
+## Branches
+
+- main — active BitGrid toolchain (expression → graph → grid → emulator).
+- master — legacy code (older GUI-based simulator). Kept for history.
+
 ## Development
 
 - No external dependencies; Python 3.9+ recommended.
