@@ -31,6 +31,19 @@ a,b,c
 python -m bitgrid.cli.run_emulator --program out/program.json --inputs inputs.csv --outputs out/results.csv --log out/debug.log
 ```
 
+- Output formatting:
+
+```
+# Hex (default)
+python -m bitgrid.cli.run_emulator --program out/smul_program.json --inputs inputs_mul.csv --outputs out/smul_hex.csv
+
+# Signed decimal for specific outputs (two's complement by declared bit width)
+python -m bitgrid.cli.run_emulator --program out/smul_program.json --inputs inputs_mul.csv --outputs out/smul_dec.csv --format dec --signed prod
+
+# Binary
+python -m bitgrid.cli.run_emulator --program out/smul_program.json --inputs inputs_mul.csv --outputs out/smul_bin.csv --format bin
+```
+
 ### Multiply example (unsigned)
 
 - Prepare a CSV of multiplicand/multiplier pairs (an example `inputs_mul.csv` is included):
