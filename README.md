@@ -1,0 +1,58 @@
+# BitGrid Python Prototype
+
+This repository provides a prototype toolchain to:
+
+1. Parse a math/bitwise expression into a directed graph of operations.
+2. Map that graph into a 2D "BitGrid" of 4-input 4-output LUT cells.
+3. Emulate the BitGrid with 2-phase updates (A: x+y even, B: x+y odd).
+4. Provide CLI tools to compile expressions and run emulations with I/O files and optional debug logs.
+
+Status: prototype, focused on bitwise ops (&, |, ^, ~), shifts (<<, >>), and addition (+). Subtraction is implemented as add with two's complement. Multiplication is not yet supported.
+
+## Quick start
+
+- Compile an expression to a graph and grid program:
+
+```
+python -m bitgrid.cli.compile_expr --expr "out = (a & b) ^ (~c) + 3" --vars "a:16,b:16,c:16" --out out --graph out/graph.json --program out/program.json
+```
+
+- Prepare a CSV with inputs (header must match variables):
+
+```
+a,b,c
+0x00FF,0x0F0F,0xAAAA
+0x1234,0x5678,0x9ABC
+```
+
+- Run the emulator and write outputs:
+
+```
+python -m bitgrid.cli.run_emulator --program out/program.json --inputs inputs.csv --outputs out/results.csv --log out/debug.log
+```
+
+## Concepts
+
+- Graph JSON: a high-level DAG of multi-bit operations.
+- Program JSON: BitGrid configuration with cells (LUTs), wiring, and I/O mapping. Includes an estimated latency (cycles) for values to propagate.
+- Emulator: performs two-phase updates per cycle; run for `latency` cycles per input vector before sampling outputs.
+
+## Limits and notes
+
+- Each LUT cell has 4 inputs and 4 outputs. We map operations per bit, usually using one cell/bit for binary ops and one cell/bit for adders (carry ripple vertically).
+- Signals can be sourced from global inputs, constants, neighbor outputs, or explicit cell references. The mapper favors vertical carry chains for add.
+- Routing is simplified; long-range cell references are allowed in this prototype. A future improvement is neighbor-only routing.
+
+## Repository layout
+
+- `bitgrid/graph.py` — DAG structures and JSON serialization.
+- `bitgrid/expr_to_graph.py` — parses expression to graph.
+- `bitgrid/mapper.py` — maps graph to BitGrid program JSON.
+- `bitgrid/emulator.py` — two-phase grid emulator.
+- `bitgrid/cli/compile_expr.py` — CLI to compile expression to graph/program.
+- `bitgrid/cli/run_emulator.py` — CLI to emulate with CSV I/O.
+
+## Development
+
+- No external dependencies; Python 3.9+ recommended.
+- Run unit smoke via the commands above.
