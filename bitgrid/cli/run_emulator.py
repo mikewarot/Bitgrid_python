@@ -9,11 +9,21 @@ from ..emulator import Emulator
 
 def parse_int(s: str) -> int:
     s = s.strip()
-    if s.lower().startswith('0x'):
-        return int(s, 16)
-    if s.lower().startswith('0b'):
-        return int(s, 2)
-    return int(s, 10)
+    if not s:
+        return 0
+    sign = 1
+    if s[0] in '+-':
+        if s[0] == '-':
+            sign = -1
+        s_body = s[1:].strip()
+    else:
+        s_body = s
+    lb = s_body.lower()
+    if lb.startswith('0x'):
+        return sign * int(s_body, 16)
+    if lb.startswith('0b'):
+        return sign * int(s_body, 2)
+    return sign * int(s_body, 10)
 
 
 def main():

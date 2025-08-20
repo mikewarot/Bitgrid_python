@@ -1,20 +1,28 @@
 from __future__ import annotations
 
 import argparse
-from typing import Dict
+from typing import Dict, Tuple
 from ..expr_to_graph import ExprToGraph
 from ..mapper import Mapper
 
 
-def parse_var_widths(s: str) -> Dict[str, int]:
+def parse_var_widths(s: str) -> Tuple[Dict[str, int], Dict[str, bool]]:
     d: Dict[str,int] = {}
+    signed: Dict[str,bool] = {}
     for part in s.split(','):
         part = part.strip()
         if not part:
             continue
         name, width = part.split(':')
-        d[name.strip()] = int(width.strip())
-    return d
+        name = name.strip()
+        wstr = width.strip().lower()
+        is_signed = False
+        if wstr.startswith('s'):
+            is_signed = True
+            wstr = wstr[1:]
+        d[name] = int(wstr)
+        signed[name] = is_signed
+    return d, signed
 
 
 def main():
@@ -25,8 +33,8 @@ def main():
     ap.add_argument('--program', required=True, help='Output program JSON path')
     args = ap.parse_args()
 
-    var_widths = parse_var_widths(args.vars)
-    etg = ExprToGraph(var_widths)
+    var_widths, var_signed = parse_var_widths(args.vars)
+    etg = ExprToGraph(var_widths, var_signed)
     g = etg.parse(args.expr)
     g.save(args.graph)
 

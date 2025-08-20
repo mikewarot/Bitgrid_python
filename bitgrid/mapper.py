@@ -32,7 +32,11 @@ class Mapper:
             if node.op in ('INPUT',):
                 continue
             if node.op == 'CONST':
-                bits = [(node.params['value'] >> b) & 1 for b in range(node.width)]
+                mask = (1 << node.width) - 1 if node.width < 63 else (1 << 63) - 1  # avoid huge shift
+                val = int(node.params['value'])
+                if node.width < 63:
+                    val = val & mask
+                bits = [((val >> b) & 1) for b in range(node.width)]
                 bit_sources[nid] = [{"type": "const", "value": bits[b]} for b in range(node.width)]
                 continue
             if node.op == 'OUTPUT':
@@ -44,7 +48,7 @@ class Mapper:
             if col >= self.W:
                 raise RuntimeError('Grid too narrow for mapping')
 
-            if node.op in ('AND','OR','XOR','NOT','SHL','SHR','BIT'):
+            if node.op in ('AND','OR','XOR','NOT','SHL','SHR','SAR','BIT'):
                 ins = [bit_sources[node.inputs[0]]]
                 if node.op not in ('NOT','BIT'):
                     ins.append(bit_sources[node.inputs[1]])
@@ -58,18 +62,30 @@ class Mapper:
                         a_src = src_bits[idx] if 0 <= idx < len(src_bits) else {"type": "const", "value": 0}
                     else:
                         a_shift = 0
-                        if node.op in ('SHL','SHR'):
+                        if node.op in ('SHL','SHR','SAR'):
                             amount = int(node.params.get('amount', 0))
                             # For output bit b, source index j = b - amount for SHL; j = b + amount for SHR
-                            a_shift = amount if node.op == 'SHL' else -amount
-                        a_src = self._shifted(ins[0], b, a_shift, width, node)
+                            if node.op == 'SHL':
+                                a_shift = amount
+                            elif node.op in ('SHR','SAR'):
+                                a_shift = -amount
+                        pad = 'zero'
+                        if node.op == 'SAR':
+                            pad = 'sign'
+                        a_src = self._shifted(ins[0], b, a_shift, width, node, pad)
                     b_src = None
                     if node.op not in ('NOT','BIT') and len(ins) > 1:
                         # For non-shift ops, use right operand as-is
-                        if node.op not in ('SHL','SHR'):
-                            # broadcast if right input is 1-bit wide (e.g., BIT)
+                        if node.op not in ('SHL','SHR','SAR'):
                             if len(ins[1]) == 1:
-                                b_src = ins[1][0]
+                                if node.op in ('AND','OR','XOR'):
+                                    # broadcast logic ops
+                                    b_src = ins[1][0]
+                                elif node.op == 'ADD':
+                                    # only add to bit 0
+                                    b_src = ins[1][0] if b == 0 else {"type": "const", "value": 0}
+                                else:
+                                    b_src = self._shifted(ins[1], b, 0, width, node)
                             else:
                                 b_src = self._shifted(ins[1], b, 0, width, node)
                     x, y = col, b
@@ -83,7 +99,7 @@ class Mapper:
                         op = 'OR'
                     elif node.op == 'XOR':
                         op = 'XOR'
-                    elif node.op in ('SHL','SHR'):
+                    elif node.op in ('SHL','SHR','SAR'):
                         # already applied shift to a_src
                         op = 'BUF'
                         in_list[0] = a_src
@@ -138,10 +154,13 @@ class Mapper:
 
         return Program(width=width, height=height, cells=cells, input_bits=input_bits, output_bits=output_bits, latency=latency)
 
-    def _shifted(self, bits: List[Dict], idx: int, shift: int, width: int, node: Node) -> Dict:
+    def _shifted(self, bits: List[Dict], idx: int, shift: int, width: int, node: Node, pad: str = 'zero') -> Dict:
         j = idx - shift
         if 0 <= j < len(bits):
             return bits[j]
+        if pad == 'sign' and len(bits) > 0:
+            # use MSB of input bits
+            return bits[len(bits) - 1]
         return {"type": "const", "value": 0}
 
     def _topo_order(self, g: Graph) -> List[str]:

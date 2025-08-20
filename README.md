@@ -7,8 +7,7 @@ This repository provides a prototype toolchain to:
 3. Emulate the BitGrid with 2-phase updates (A: x+y even, B: x+y odd).
 4. Provide CLI tools to compile expressions and run emulations with I/O files and optional debug logs.
 
-Status: prototype, focused on bitwise ops (&, |, ^, ~), shifts (<<, >>), and addition (+). Subtraction is implemented as add with two's complement. Multiplication is not yet supported.
-Status update: Multiplication (*) is now supported via shift-and-add partial products (unsigned).
+Status: prototype focused on bitwise ops (&, |, ^, ~), shifts (<<, >>), addition (+), subtraction (two's complement), and multiplication (*) via shift-and-add. Signed math is supported by prefixing widths with 's' (e.g., a:s8).
 
 ## Quick start
 
@@ -30,6 +29,8 @@ a,b,c
 
 ```
 python -m bitgrid.cli.run_emulator --program out/program.json --inputs inputs.csv --outputs out/results.csv --log out/debug.log
+```
+
 ### Multiply example (unsigned)
 
 - Prepare a CSV of multiplicand/multiplier pairs (an example `inputs_mul.csv` is included):
@@ -46,6 +47,20 @@ a,b
 ```
 python -m bitgrid.cli.compile_expr --expr "prod = a * b" --vars "a:8,b:8" --graph out/mul_graph.json --program out/mul_program.json
 python -m bitgrid.cli.run_emulator --program out/mul_program.json --inputs inputs_mul.csv --outputs out/mul_results.csv
+```
+
+### Signed math examples
+
+- Signed multiply (two's complement):
+
+```
+python -m bitgrid.cli.compile_expr --expr "prod = a * b" --vars "a:s8,b:s8" --graph out/smul_graph.json --program out/smul_program.json
+```
+
+- Signed right shift uses arithmetic shift when the left operand is signed:
+
+```
+python -m bitgrid.cli.compile_expr --expr "q = a >> 1" --vars "a:s8" --graph out/sar_graph.json --program out/sar_program.json
 ```
 
 ```
