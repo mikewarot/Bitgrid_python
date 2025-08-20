@@ -8,6 +8,7 @@ This repository provides a prototype toolchain to:
 4. Provide CLI tools to compile expressions and run emulations with I/O files and optional debug logs.
 
 Status: prototype, focused on bitwise ops (&, |, ^, ~), shifts (<<, >>), and addition (+). Subtraction is implemented as add with two's complement. Multiplication is not yet supported.
+Status update: Multiplication (*) is now supported via shift-and-add partial products (unsigned).
 
 ## Quick start
 
@@ -29,6 +30,24 @@ a,b,c
 
 ```
 python -m bitgrid.cli.run_emulator --program out/program.json --inputs inputs.csv --outputs out/results.csv --log out/debug.log
+### Multiply example (unsigned)
+
+- Prepare a CSV of multiplicand/multiplier pairs (an example `inputs_mul.csv` is included):
+
+```
+a,b
+6,7
+12,13
+0x0F,0x10
+```
+
+- Compile a multiply program and run it:
+
+```
+python -m bitgrid.cli.compile_expr --expr "prod = a * b" --vars "a:8,b:8" --graph out/mul_graph.json --program out/mul_program.json
+python -m bitgrid.cli.run_emulator --program out/mul_program.json --inputs inputs_mul.csv --outputs out/mul_results.csv
+```
+
 ```
 
 ## Concepts

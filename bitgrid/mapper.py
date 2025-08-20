@@ -44,24 +44,34 @@ class Mapper:
             if col >= self.W:
                 raise RuntimeError('Grid too narrow for mapping')
 
-            if node.op in ('AND','OR','XOR','NOT','SHL','SHR'):
+            if node.op in ('AND','OR','XOR','NOT','SHL','SHR','BIT'):
                 ins = [bit_sources[node.inputs[0]]]
-                if node.op != 'NOT':
+                if node.op not in ('NOT','BIT'):
                     ins.append(bit_sources[node.inputs[1]])
                 width = node.width
                 node_bits: List[Dict] = []
                 for b in range(width):
-                    # Apply shift to left operand for SHL/SHR
-                    a_shift = 0
-                    if node.op in ('SHL','SHR'):
-                        amount = node.params.get('amount', 0)
-                        a_shift = -amount if node.op == 'SHL' else amount
-                    a_src = self._shifted(ins[0], b, a_shift, width, node)
+                    # Apply shift to left operand for SHL/SHR (left shift moves bits up index)
+                    if node.op == 'BIT':
+                        idx = int(node.params.get('index', 0))
+                        src_bits = ins[0]
+                        a_src = src_bits[idx] if 0 <= idx < len(src_bits) else {"type": "const", "value": 0}
+                    else:
+                        a_shift = 0
+                        if node.op in ('SHL','SHR'):
+                            amount = int(node.params.get('amount', 0))
+                            # For output bit b, source index j = b - amount for SHL; j = b + amount for SHR
+                            a_shift = amount if node.op == 'SHL' else -amount
+                        a_src = self._shifted(ins[0], b, a_shift, width, node)
                     b_src = None
-                    if node.op != 'NOT' and len(ins) > 1:
+                    if node.op not in ('NOT','BIT') and len(ins) > 1:
                         # For non-shift ops, use right operand as-is
                         if node.op not in ('SHL','SHR'):
-                            b_src = self._shifted(ins[1], b, 0, width, node)
+                            # broadcast if right input is 1-bit wide (e.g., BIT)
+                            if len(ins[1]) == 1:
+                                b_src = ins[1][0]
+                            else:
+                                b_src = self._shifted(ins[1], b, 0, width, node)
                     x, y = col, b
                     in_list = [a_src, b_src or {"type": "const", "value": 0}, {"type": "const", "value": 0}, {"type": "const", "value": 0}]
                     op = 'BUF'
@@ -77,6 +87,8 @@ class Mapper:
                         # already applied shift to a_src
                         op = 'BUF'
                         in_list[0] = a_src
+                    elif node.op == 'BIT':
+                        op = 'BUF'
                     cell = Cell(x=x, y=y, inputs=in_list, op=op, params={})
                     cells.append(cell)
                     node_bits.append({"type": "cell", "x": x, "y": y, "out": 0})

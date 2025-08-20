@@ -13,6 +13,7 @@ SUPPORTED_BINOPS = {
     ast.RShift: 'SHR',
     ast.Add: 'ADD',
     ast.Sub: 'SUB',  # will be lowered to ADD with two's complement
+    ast.Mult: 'MUL',  # will be lowered to shift-add partial products
 }
 SUPPORTED_UNARYOPS = {
     ast.Invert: 'NOT',
@@ -71,6 +72,8 @@ class ExprToGraph:
             right_id, rw = self._visit(node.right)
             width = max(lw, rw)
             params = {}
+            if op == 'MUL':
+                return self._lower_mul(left_id, lw, right_id, rw)
             if op in ('SHL', 'SHR'):
                 # Right must be const for prototype
                 rid_node = node.right
@@ -93,3 +96,38 @@ class ExprToGraph:
             self.graph.add_node(Node(id=nid, op=op, inputs=[left_id, right_id], params=params, width=width))
             return nid, width
         raise ValueError(f'Unsupported expression node: {ast.dump(node)}')
+
+    def _lower_mul(self, left_id: str, lw: int, right_id: str, rw: int):
+        # shift-and-add partial products: sum_{i=0..rw-1} ((left << i) AND bit(right,i))
+        result_w = lw + rw
+        partials = []
+        for i in range(rw):
+            # bit extract node
+            bit_id = self._new_id('bit')
+            self.graph.add_node(Node(id=bit_id, op='BIT', inputs=[right_id], params={'index': i}, width=1))
+            # shift left by i
+            if i == 0:
+                shl_id = left_id
+                shl_w = lw
+            else:
+                amt_id = self._new_id('const')
+                self.graph.add_const(amt_id, i, max(1, i.bit_length()))
+                shl_id = self._new_id('shl')
+                self.graph.add_node(Node(id=shl_id, op='SHL', inputs=[left_id, amt_id], params={'amount': i}, width=result_w))
+                shl_w = result_w
+            # mask by bit (broadcast handled in mapper)
+            and_id = self._new_id('and')
+            self.graph.add_node(Node(id=and_id, op='AND', inputs=[shl_id, bit_id], width=result_w))
+            partials.append((and_id, result_w))
+        if not partials:
+            zero_id = self._new_id('const')
+            self.graph.add_const(zero_id, 0, 1)
+            return zero_id, 1
+        # accumulate via adds
+        acc_id, acc_w = partials[0]
+        for pid, pw in partials[1:]:
+            add_id = self._new_id('add')
+            self.graph.add_node(Node(id=add_id, op='ADD', inputs=[acc_id, pid], width=result_w))
+            acc_id = add_id
+            acc_w = result_w
+        return acc_id, result_w
