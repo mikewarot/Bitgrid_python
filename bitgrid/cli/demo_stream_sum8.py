@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from typing import List, Dict, Tuple
 from ..expr_to_graph import ExprToGraph
 from ..mapper import Mapper
 from ..program import Program, Cell
 from ..emulator import Emulator
-from ..router import ManhattanRouter, route_luts
+from ..router import route_luts
 
 
 def embed_program(prog: Program, new_w: int, new_h: int, x_off: int, y_off: int) -> Program:
@@ -26,88 +27,27 @@ def embed_program(prog: Program, new_w: int, new_h: int, x_off: int, y_off: int)
     return Program(width=new_w, height=new_h, cells=new_cells, input_bits=prog.input_bits, output_bits=new_outputs, latency=new_w + new_h)
 
 
-# removed vertical spreading to preserve carry parity (alternating rows)
+def find_adder_column(prog: Program) -> Tuple[int, int, int]:
+    ys = [c.y for c in prog.cells if c.op == 'ADD_BIT']
+    xs = [c.x for c in prog.cells if c.op == 'ADD_BIT']
+    if not ys or not xs:
+        raise SystemExit('No ADD_BIT cells found in mapped program')
+    x = xs[0]
+    y_min, y_max = min(ys), max(ys)
+    return x, y_min, y_max
 
 
-def route_inputs_local_adjacent(prog: Program) -> Program:
-    # For each cell input referencing input 'a' or 'b', create a local ROUTE4 injector adjacent to the sink:
-    # - 'a' injectors placed at West neighbor (x-1,y) forwarding W->E
-    # - 'b' injectors placed at East neighbor (x+1,y) forwarding E->W
-    new_cells: List[Cell] = []
-    dir_to_idx = {'N':0,'E':1,'S':2,'W':3}
-    for sink in prog.cells:
-        for idx, src in enumerate(sink.inputs):
-            if src.get('type') != 'input':
-                continue
-            name = str(src.get('name'))
-            bit = int(src.get('bit', 0))
-            if name == 'a':
-                x, y = sink.x - 1, sink.y
-                inj_in = [{"type":"const","value":0},{"type":"const","value":0},{"type":"const","value":0},{"type":"input","name":"a","bit":bit}]
-                inj = Cell(x=x, y=y, inputs=inj_in, op='ROUTE4', params={'luts': route_luts('E','W')})
-                new_cells.append(inj)
-                sink.inputs[idx] = {"type":"cell","x":x,"y":y,"out":dir_to_idx['E']}
-            elif name == 'b':
-                # Place b injector at North neighbor forwarding N->S to avoid blocking East side
-                x, y = sink.x, sink.y - 1
-                inj_in = [{"type":"input","name":"b","bit":bit},{"type":"const","value":0},{"type":"const","value":0},{"type":"const","value":0}]
-                inj = Cell(x=x, y=y, inputs=inj_in, op='ROUTE4', params={'luts': route_luts('S','N')})
-                new_cells.append(inj)
-                sink.inputs[idx] = {"type":"cell","x":x,"y":y,"out":dir_to_idx['S']}
-    return Program(width=prog.width, height=prog.height, cells=prog.cells + new_cells, input_bits=prog.input_bits, output_bits=prog.output_bits, latency=prog.latency)
+# Note: We don't build custom pipelines here. We stream inputs directly into the mapped adder
+# and align the per-row sum bits in software to account for carry ripple and hop latency.
 
 
-def route_outputs_to_east(prog: Program, out_name: str) -> Program:
-    # Build straight W->E ROUTE4 chains along a mostly free row to x = width-1.
-    used = {(c.x, c.y) for c in prog.cells}
-    new_cells: List[Cell] = []
-    dir_to_idx = {'N':0,'E':1,'S':2,'W':3}
-    east_x = prog.width - 1
-    if out_name not in prog.output_bits:
-        return prog
-    new_out_bits: List[Dict] = []
-    for src in prog.output_bits[out_name]:
-        if src.get('type') != 'cell':
-            new_out_bits.append(src)
-            continue
-        sx, sy = int(src['x']), int(src['y'])
-        # Pick a row: prefer sy; if occupied along path, try sy+1 then sy-1 within bounds
-        def path_free(yrow: int) -> bool:
-            return all((x, yrow) not in used for x in range(sx+1, east_x+1))
-        yrow = sy
-        if not path_free(yrow):
-            if sy + 1 < prog.height and path_free(sy + 1):
-                yrow = sy + 1
-            elif sy - 1 >= 0 and path_free(sy - 1):
-                yrow = sy - 1
-        # If yrow != sy, add a vertical hop first
-        prev = {"type":"cell","x":sx,"y":sy,"out":0}
-        if yrow != sy:
-            direction = 'S' if yrow > sy else 'N'
-            opposite = 'N' if direction == 'S' else 'S'
-            inputs = [{"type":"const","value":0} for _ in range(4)]
-            inputs[dir_to_idx[opposite]] = prev
-            new_cells.append(Cell(x=sx, y=yrow, inputs=inputs, op='ROUTE4', params={'luts': route_luts(direction, opposite)}))
-            used.add((sx, yrow))
-            prev = {"type":"cell","x":sx,"y":yrow,"out":dir_to_idx[direction]}
-        # Go east along yrow
-        cur_x = sx
-        while cur_x < east_x:
-            nx = cur_x + 1
-            inputs = [{"type":"const","value":0} for _ in range(4)]
-            inputs[dir_to_idx['W']] = prev
-            new_cells.append(Cell(x=nx, y=yrow, inputs=inputs, op='ROUTE4', params={'luts': route_luts('E','W')}))
-            used.add((nx, yrow))
-            prev = {"type":"cell","x":nx,"y":yrow,"out":dir_to_idx['E']}
-            cur_x = nx
-        new_out_bits.append(prev)
-    new_output_bits = dict(prog.output_bits)
-    new_output_bits[out_name] = new_out_bits
-    return Program(width=prog.width, height=prog.height, cells=prog.cells + new_cells, input_bits=prog.input_bits, output_bits=new_output_bits, latency=prog.latency)
+def wire_adder_to_pipelines(prog: Program, x_adder: int, y_min: int, y_max: int):
+    # No-op in this simplified streaming demo (kept for compatibility if needed later)
+    return
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Stream pairs of 8-bit numbers from west edge into an 8-bit adder, read sum at east edge')
+    ap = argparse.ArgumentParser(description='Stream pairs of 8-bit numbers into a pipelined 8-bit adder and print aligned sums (cps=2)')
     ap.add_argument('--width', type=int, default=64)
     ap.add_argument('--height', type=int, default=32)
     ap.add_argument('--cps', type=int, default=2)
@@ -124,15 +64,47 @@ def main():
     mapper = Mapper(grid_width=W, grid_height=H)
     base_prog = mapper.map(g)
 
-    # Embed into a larger canvas with margin on west/east
+    # Embed into a larger canvas with margin on sides
     x_off, y_off = 8, 4
     prog = embed_program(base_prog, new_w=W, new_h=H, x_off=x_off, y_off=y_off)
 
-    # Route inputs a and b via local adjacent injectors next to each sink
-    prog = route_inputs_local_adjacent(prog)
+    # Locate adder column and bit range
+    x_add, y_min, y_max = find_adder_column(prog)
+    bit_count = (y_max - y_min + 1)
 
-    # Route sum outputs to east edge lanes
-    prog = route_outputs_to_east(prog, 'sum')
+    dir_to_idx = {'N':0,'E':1,'S':2,'W':3}
+    lsb_even = ((x_add + y_min) % 2 == 0)
+    def cycle_i(i: int) -> int:
+        return (i // 2) if lsb_even else ((i + 1) // 2)
+    new_cells: List[Cell] = []
+
+    # Equalize sum bit timing by delaying lower bits further to the east so all bits align in the same step.
+    sum_bits = list(prog.output_bits.get('sum', []))
+    new_sum_bits: List[Dict] = []
+    for c in prog.cells:
+        pass  # ensure we don't accidentally reorder
+    # Align all sum bits to K cycles after step start
+    K = max(cycle_i(i) for i in range(bit_count))
+    for src in sum_bits:
+        if src.get('type') != 'cell':
+            new_sum_bits.append(src)
+            continue
+        y = int(src['y'])
+        i = y - y_min
+        delay = K - cycle_i(i)
+        prev = src
+        for k in range(delay):
+            x = x_add + bit_count + 2 + k  # place far enough to the right
+            inputs = [{"type":"const","value":0} for _ in range(4)]
+            inputs[dir_to_idx['W']] = prev
+            cell = Cell(x=x, y=y, inputs=inputs, op='ROUTE4', params={'luts': route_luts('E','W')})
+            new_cells.append(cell)
+            prev = {"type":"cell","x":x,"y":y,"out":dir_to_idx['E']}
+        new_sum_bits.append(prev)
+
+    prog = Program(width=prog.width, height=prog.height, cells=prog.cells + new_cells,
+                   input_bits=prog.input_bits, output_bits={**prog.output_bits, 'sum': new_sum_bits},
+                   latency=prog.latency)
 
     # Stream pairs
     emu = Emulator(prog)
@@ -152,12 +124,41 @@ def main():
         b = int(parts[1], 0)
         pairs.append((a & 0xFF, b & 0xFF))
     steps = [ {'a': a, 'b': b} for (a,b) in pairs ]
-    # Drain zeros
+    # Drain zeros to flush the pipeline
     steps += [ {'a':0,'b':0} for _ in range(16) ]
 
-    samples = emu.run_stream(steps, cycles_per_step=max(1,args.cps), reset=True)
-    for t, s in enumerate(samples):
-        print(f"t={t}: sum=0x{s.get('sum',0):02X}")
+    # Derive K (max per-bit step lag) from adder placement and parity
+    xs = [c.x for c in prog.cells if c.op == 'ADD_BIT']
+    ys = [c.y for c in prog.cells if c.op == 'ADD_BIT']
+    if not xs or not ys:
+        raise SystemExit('No ADD_BIT cells found')
+    x_add = xs[0]; y_min = min(ys); y_max = max(ys)
+    bit_count = (y_max - y_min + 1)
+    lsb_even = ((x_add + y_min) % 2 == 0)
+    def lag(i: int) -> int:
+        return (i // 2) if lsb_even else ((i + 1) // 2)
+    K = max(lag(i) for i in range(bit_count))
+
+    # Hold each input pair steady for K+1 steps, then sample the sum at the end of the window
+    hold = K + 1
+    replay: List[Dict[str,int]] = []
+    for (a,b) in pairs:
+        replay.extend([{ 'a': a, 'b': b } for _ in range(hold)])
+    # add a drain block to reset
+    replay.extend([{ 'a': 0, 'b': 0 } for _ in range(hold)])
+
+    samples = emu.run_stream(replay, cycles_per_step=max(1,args.cps), reset=True)
+    results: List[int] = []
+    for i in range(len(pairs)):
+        idx = (i+1)*hold - 1
+        if idx < len(samples):
+            results.append(samples[idx].get('sum', 0) & 0xFF)
+    for i in range(min(len(results), len(pairs))):
+        a,b = pairs[i]
+        print(f"i={i}: a={a} b={b} -> sum=0x{results[i]:02X}")
+
+    # Optionally print compact list of produced sums
+    # print('sums:', [f"0x{v:02X}" for v in produced])
 
 
 if __name__ == '__main__':
