@@ -211,6 +211,21 @@ The router uses A* Manhattan paths and inserts ROUTE4 cells per hop. Basic occup
 - For non-trivial logic (e.g., adders), additional internal ripple/carry latency applies. The `latency` field in Program JSON is used by vector runs to determine how many cycles to run before sampling outputs.
 - Even grid dimensions are required so that A/B parity tiles perfectly across the array without drift.
 
+Two‑phase checkerboard (A=even, B=odd):
+
+```
+ x+y parity:
+
+	 y→   0 1 2 3
+ x ↓
+ 0     A B A B
+ 1     B A B A
+ 2     A B A B
+ 3     B A B A
+
+One full cycle = A then B. A neighbor hop takes one cycle.
+```
+
 ### Mapping and routing
 
 - Mapper places bit-sliced logic and uses vertical ripple-carry for add/sub to align with two-phase timing.
@@ -227,6 +242,26 @@ The router uses A* Manhattan paths and inserts ROUTE4 cells per hop. Basic occup
 	- Cell output: `{ "type": "cell", "x": 10, "y": 5, "out": 1 }`
 
 This is a compact overview; see code in `bitgrid/program.py`, `bitgrid/emulator.py`, and `bitgrid/router.py` for exact semantics.
+
+### LUT indexing example
+
+- Input bit order is `[N, E, S, W]` and the LUT index is computed as: `idx = N | (E<<1) | (S<<2) | (W<<3)`.
+- Example: if N=1, E=0, S=1, W=0 then `idx = 1 | (0<<1) | (1<<2) | (0<<3) = 5`. The output bit equals `(lut >> 5) & 1`.
+
+### ROUTE4 forwarding LUT example
+
+Forward west input to east output (W→E pass‑through). Only the east output LUT needs bits; others are zero:
+
+```json
+"op": "ROUTE4",
+"params": { "luts": [ 0, 0xFF00, 0, 0 ] }
+```
+
+Why 0xFF00? For index 0..15, the west input equals bit `(idx>>3)&1`. That is 0 for idx 0..7 and 1 for idx 8..15, which sets the upper 8 bits of the 16‑bit LUT (0xFF00). Similar patterns:
+
+- Forward S→N: N LUT = 0xF0F0 (since `(idx>>2)&1` toggles every 4). 
+- Forward E→W: W LUT = 0xCCCC (since `(idx>>1)&1` toggles every 2). 
+- Forward N→S: S LUT = 0xAAAA (since `(idx>>0)&1` toggles every 1).
 
 ## Troubleshooting
 
