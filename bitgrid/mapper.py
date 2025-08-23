@@ -13,6 +13,8 @@ from .program import Program, Cell
 
 class Mapper:
     def __init__(self, grid_width: int = 64, grid_height: int = 64):
+        if grid_width % 2 != 0 or grid_height % 2 != 0:
+            raise ValueError('Grid dimensions must be even (width and height).')
         self.W = grid_width
         self.H = grid_height
 

@@ -12,11 +12,13 @@ def main():
     ap = argparse.ArgumentParser(description='Run f32 multiply on BitGrid')
     ap.add_argument('--inputs', required=True, help='CSV with columns a,b as 32-bit hex (e.g., 0x3F800000) or decimals')
     ap.add_argument('--outputs', required=True, help='Output CSV file')
-    ap.add_argument('--grid-width', type=int, default=1024, help='Grid width capacity for mapping (default: 1024)')
-    ap.add_argument('--grid-height', type=int, default=256, help='Grid height capacity for mapping (default: 256)')
+    ap.add_argument('--grid-width', type=int, default=1024, help='Grid width capacity for mapping (default: 1024, must be even)')
+    ap.add_argument('--grid-height', type=int, default=256, help='Grid height capacity for mapping (default: 256, must be even)')
     args = ap.parse_args()
 
     g = build_f32_mul_graph('a', 'b', 'prod')
+    if args.grid_width % 2 or args.grid_height % 2:
+        raise SystemExit('Grid width and height must be even.')
     prog = Mapper(grid_width=args.grid_width, grid_height=args.grid_height).map(g)
 
     # Load inputs
