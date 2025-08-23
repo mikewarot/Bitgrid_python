@@ -40,7 +40,7 @@ def main():
 
     emu = Emulator(prog)
     out = emu.run([{}])[0]
-    print(f"Output at {dx},{dy} (E out) = {out['out']}")
+    print(f"Output at {dx},{dy} ({last_dir} out) = {out['out']}")
 
 
 if __name__ == '__main__':

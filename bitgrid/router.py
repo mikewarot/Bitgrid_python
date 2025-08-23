@@ -42,16 +42,18 @@ class ManhattanRouter:
     def is_free(self, x: int, y: int) -> bool:
         return (0 <= x < self.W and 0 <= y < self.H and not self.occ[x][y])
 
-    def route(self, src: Tuple[int,int], dst: Tuple[int,int]) -> List[Tuple[int,int]]:
-        # A* Manhattan routing with 4-neighbor moves and simple occupancy
+    def route(self, src: Tuple[int,int], dst: Tuple[int,int], turn_penalty: float = 0.0) -> List[Tuple[int,int]]:
+        # A* Manhattan routing with 4-neighbor moves and simple occupancy.
+        # Optional turn_penalty (>0) biases toward straighter paths (fewer corners).
         sx, sy = src
         tx, ty = dst
         def h(x: int, y: int) -> int:
             return abs(x - tx) + abs(y - ty)
-        openh: List[Tuple[int, Tuple[int,int]]] = []
-        heapq.heappush(openh, (h(sx, sy), (sx, sy)))
-        gscore: Dict[Tuple[int,int], int] = {(sx, sy): 0}
+        openh: List[Tuple[float, Tuple[int,int]]] = []
+        heapq.heappush(openh, (float(h(sx, sy)), (sx, sy)))
+        gscore: Dict[Tuple[int,int], float] = {(sx, sy): 0.0}
         came: Dict[Tuple[int,int], Tuple[int,int]] = {}
+        came_dir: Dict[Tuple[int,int], Tuple[int,int]] = {}
         closed: set[Tuple[int,int]] = set()
         while openh:
             _, (x, y) = heapq.heappop(openh)
@@ -71,11 +73,19 @@ class ManhattanRouter:
                 nx, ny = x+dx, y+dy
                 if not self.is_free(nx, ny) and (nx, ny) != (tx, ty):
                     continue
-                ng = gscore[(x, y)] + 1
-                if ng < gscore.get((nx, ny), 1<<30):
+                # base cost is 1 per move
+                cost = 1.0
+                # apply small penalty for turns relative to arriving direction
+                if turn_penalty > 0.0 and (x, y) in came_dir:
+                    pdx, pdy = came_dir[(x, y)]
+                    if (pdx, pdy) != (dx, dy):
+                        cost += float(turn_penalty)
+                ng = gscore[(x, y)] + cost
+                if ng < gscore.get((nx, ny), float('inf')):
                     gscore[(nx, ny)] = ng
                     came[(nx, ny)] = (x, y)
-                    heapq.heappush(openh, (ng + h(nx, ny), (nx, ny)))
+                    came_dir[(nx, ny)] = (dx, dy)
+                    heapq.heappush(openh, (ng + float(h(nx, ny)), (nx, ny)))
         raise RuntimeError("No route found")
 
     def wire_with_route4(self, src_cell: Tuple[int,int], dst_cell: Tuple[int,int]) -> Tuple[List[Cell], str]:

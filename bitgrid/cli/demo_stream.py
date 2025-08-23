@@ -12,6 +12,7 @@ def main():
     ap.add_argument('--height', type=int, default=4)
     ap.add_argument('--row', type=int, default=1, help='row (y) to route along')
     ap.add_argument('--len', type=int, default=8, help='number of hops')
+    ap.add_argument('--cps', type=int, default=2, help='cycles per step (2 needed for one hop/step)')
     args = ap.parse_args()
 
     W, H = args.width, args.height
@@ -19,6 +20,11 @@ def main():
         raise SystemExit("Grid width and height must be even.")
     y = args.row
     L = args.len
+    cps = args.cps
+    if not (0 <= y < H):
+        raise SystemExit(f"row must be within [0,{H-1}]")
+    if L < 1 or (1+L) >= W:
+        raise SystemExit("len must be >=1 and path must fit within width")
 
     cells = []
     # West-edge injector at (0,y): use input bit 'din' as West input, route out East
@@ -42,7 +48,7 @@ def main():
 
     # Stream: one cycle per step, pulse din=1 at t0, then 0s
     steps = [{"din": 1}] + [{"din": 0} for _ in range(L+4)]
-    samples = emu.run_stream(steps, cycles_per_step=2, reset=True)
+    samples = emu.run_stream(steps, cycles_per_step=cps, reset=True)
     for t, s in enumerate(samples):
         print(f"t={t}: dout={s['dout']}")
 
