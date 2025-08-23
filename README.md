@@ -278,6 +278,7 @@ The router uses A* Manhattan paths and inserts ROUTE4 cells per hop. Basic occup
 - bitgrid.cli.emu_load_bitstream — load a bitstream into a Program and run the emulator on CSV inputs
 - bitgrid.cli.bitstream_inspect — inspect a bitstream header (dims/order/flags/bits/CRC)
 - bitgrid.cli.serve_tcp — serve the emulator over TCP using the BGCF runtime protocol
+- bitgrid.cli.bridge_tcp — bridge two servers over a single seam (left.east -> right.west)
 - bitgrid.cli.bgcf_dump — BGCF packet dumper: parse files or run a TCP proxy that logs frames
 - Demos: demo_route4, demo_stream, demo_throughput, demo_edge_io_hello, demo_edge_io_4bit, demo_sum8_correct, demo_stream_sum8
 - Tools: bench_cycles (raw two‑phase loop benchmark)
@@ -380,6 +381,40 @@ py -m bitgrid.cli.bgcf_dump --proxy --listen-port 9001 --target-port 9000 --out 
 # Then point your client at the proxy
 py -m bitgrid.cli.client_tcp --host 127.0.0.1 --port 9001 --hello --quit
 ```
+
+West↔East seam bridge between two servers:
+
+```powershell
+# Start two servers (different ports); both need a Program JSON with matched lane I/O names
+py -m bitgrid.cli.serve_tcp --program out/left_program.json --port 9000 --verbose
+py -m bitgrid.cli.serve_tcp --program out/right_program.json --port 9002 --verbose
+
+# Run the bridge (left.east -> right.west), for N epochs
+py -m bitgrid.cli.bridge_tcp --left 127.0.0.1:9000 --right 127.0.0.1:9002 --epochs 8 --left-east-name east --right-west-name west
+```
+
+Built-in server-to-server link (experimental):
+
+```powershell
+# Start two servers with programs that expose matching seam names
+py -m bitgrid.cli.serve_tcp --program out/left_program.json --port 9000 --verbose
+py -m bitgrid.cli.serve_tcp --program out/right_program.json --port 9002 --verbose
+
+# From any client connected to the LEFT server, request a link to the RIGHT server
+# Format: DIR,LOCAL_OUT,REMOTE_IN,HOST,PORT[,LANES]; DIR can be E or 1 for east
+py -m bitgrid.cli.client_tcp --port 9000 --link E,east,west,127.0.0.1,9002,0
+
+# Now STEP on the left server will interleave steps with the peer and shuttle the seam
+py -m bitgrid.cli.client_tcp --port 9000 --set in=0x0 --step 4 --get
+
+# Tear down the link when done
+py -m bitgrid.cli.client_tcp --port 9000 --unlink
+```
+
+Notes:
+- Current LINK implementation supports local east → peer west only and relays one cycle at a time per STEP.
+- Lanes defaults to min(local.height, peer.height) when 0 is provided.
+- For observability, you can run the dumper proxy between the client and server; LINK/UNLINK frames are summarized in logs.
 ```
 
 Client outline (Pascal/C++): connect to host:port and speak BGCF frames:

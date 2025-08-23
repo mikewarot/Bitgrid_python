@@ -11,6 +11,7 @@ from ..protocol import (
     try_parse_frame,
     MsgType,
     decode_name_u64_map,
+    parse_link_payload,
 )
 
 
@@ -84,6 +85,15 @@ def summarize_frame(frame: Dict) -> Dict:
             summary['quit'] = True
         elif t == MsgType.SHUTDOWN:
             summary['shutdown'] = True
+        elif t == MsgType.LINK:
+            cfg = parse_link_payload(payload)
+            summary['link'] = cfg
+        elif t == MsgType.UNLINK:
+            summary['unlink'] = True
+        elif t == MsgType.LINK_ACK:
+            import struct
+            lanes = struct.unpack('<H', payload[:2])[0] if len(payload) >= 2 else 0
+            summary['link_ack'] = {'lanes': lanes}
         elif t == MsgType.ERROR:
             code, msg = _parse_error_payload(payload)
             summary['error'] = {'code': code, 'msg': msg}

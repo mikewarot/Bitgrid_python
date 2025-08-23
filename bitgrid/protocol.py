@@ -32,6 +32,9 @@ class MsgType:
     OUTPUTS = 0x07      # device->host (TLV string->u64)
     QUIT = 0x08         # host->device (close current connection)
     SHUTDOWN = 0x09     # host->device (stop listener and exit server)
+    LINK = 0x0A         # host->device (establish inter-server link)
+    UNLINK = 0x0B       # host->device (tear down inter-server link)
+    LINK_ACK = 0x0C     # device->host (link established ok)
     ERROR = 0x7F        # device->host error
 
 
@@ -138,3 +141,61 @@ def payload_step(cycles: int) -> bytes:
 def payload_error(code: int, msg: str = '') -> bytes:
     b = msg.encode('utf-8')[:255]
     return struct.pack('<HB', code & 0xFFFF, len(b)) + b
+
+
+# Inter-server link payload helpers
+# Layout (< little-endian):
+#   u8 dir_code (0=N,1=E,2=S,3=W)
+#   u8 reserved
+#   u16 local_out_len, bytes local_out_name (UTF-8)
+#   u16 remote_in_len, bytes remote_in_name (UTF-8)
+#   u16 host_len, bytes host (ASCII/UTF-8)
+#   u16 port
+#   u16 lanes (0 = auto)
+
+def payload_link(dir_code: int, local_out: str, remote_in: str, host: str, port: int, lanes: int = 0) -> bytes:
+    lo = local_out.encode('utf-8')
+    ri = remote_in.encode('utf-8')
+    hh = host.encode('utf-8')
+    parts = [struct.pack('<BB', dir_code & 0xFF, 0)]
+    parts.append(struct.pack('<H', len(lo))); parts.append(lo)
+    parts.append(struct.pack('<H', len(ri))); parts.append(ri)
+    parts.append(struct.pack('<H', len(hh))); parts.append(hh)
+    parts.append(struct.pack('<HH', int(port) & 0xFFFF, int(lanes) & 0xFFFF))
+    return b''.join(parts)
+
+
+def parse_link_payload(b: bytes) -> Dict[str, Any]:
+    if len(b) < 2:
+        raise ValueError('link payload too short')
+    dir_code = b[0]
+    _res = b[1]
+    off = 2
+    def read_str() -> str:
+        nonlocal off
+        if off + 2 > len(b):
+            raise ValueError('link payload truncated')
+        ln = struct.unpack('<H', b[off:off+2])[0]
+        off += 2
+        s = b[off:off+ln].decode('utf-8', errors='ignore')
+        off += ln
+        return s
+    local_out = read_str()
+    remote_in = read_str()
+    host = read_str()
+    if off + 4 > len(b):
+        raise ValueError('link payload truncated (port/lanes)')
+    port, lanes = struct.unpack('<HH', b[off:off+4])
+    return {
+        'dir_code': dir_code,
+        'local_out': local_out,
+        'remote_in': remote_in,
+        'host': host,
+        'port': port,
+        'lanes': lanes,
+    }
+
+
+def payload_link_ack(lanes: int) -> bytes:
+    # Minimal ACK payload: u16 lanes accepted
+    return struct.pack('<H', int(lanes) & 0xFFFF)

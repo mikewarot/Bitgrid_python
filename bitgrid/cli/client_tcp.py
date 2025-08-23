@@ -10,6 +10,7 @@ from ..protocol import (
     encode_name_u64_map,
     decode_name_u64_map,
     payload_hello,
+    payload_link,
 )
 
 
@@ -78,6 +79,39 @@ def do_shutdown(sock: socket.socket):
     sock.sendall(pack_frame(MsgType.SHUTDOWN))
 
 
+def do_link(sock: socket.socket, dir_code: int, local_out: str, remote_in: str, host: str, port: int, lanes: int = 0):
+    payload = payload_link(dir_code, local_out, remote_in, host, port, lanes)
+    sock.sendall(pack_frame(MsgType.LINK, payload))
+    # Await LINK_ACK or ERROR (optional best-effort)
+    resp = send_and_recv(sock, b'', timeout=3.0)
+    if not resp:
+        print('LINK: no response')
+        return
+    t = resp.get('type')
+    if t == MsgType.LINK_ACK:
+        lanes_ack = 0
+        pl = resp.get('payload', b'')
+        if len(pl) >= 2:
+            import struct
+            lanes_ack = struct.unpack('<H', pl[:2])[0]
+        print(f'LINK: ok (lanes={lanes_ack})')
+    elif t == MsgType.ERROR:
+        # Decode error message
+        pl = resp.get('payload', b'')
+        code = msg = None
+        if len(pl) >= 3:
+            import struct
+            code, mlen = struct.unpack('<HB', pl[:3])
+            msg = pl[3:3+mlen].decode('utf-8', errors='replace')
+        print(f'LINK: error code={code} msg={msg}')
+    else:
+        print(f'LINK: unexpected response type={t}')
+
+
+def do_unlink(sock: socket.socket):
+    sock.sendall(pack_frame(MsgType.UNLINK))
+
+
 def main():
     ap = argparse.ArgumentParser(description='Simple BGCF TCP client for the BitGrid server')
     ap.add_argument('--host', default='127.0.0.1')
@@ -89,6 +123,8 @@ def main():
     ap.add_argument('--get', dest='get_outputs', action='store_true', help='Fetch outputs and print')
     ap.add_argument('--quit', action='store_true', help='Send QUIT to stop the server connection')
     ap.add_argument('--shutdown', action='store_true', help='Send SHUTDOWN to stop the server listener')
+    ap.add_argument('--link', metavar='DIR,LO,RI,HOST,PORT[,LANES]', help='Establish inter-server link. DIR=N|E|S|W numeric (0-3) or letter; LO=local_out, RI=remote_in')
+    ap.add_argument('--unlink', action='store_true', help='Tear down inter-server link')
     args = ap.parse_args()
 
     with socket.create_connection((args.host, args.port), timeout=2.0) as sock:
@@ -117,6 +153,22 @@ def main():
             do_quit(sock)
         if args.shutdown:
             do_shutdown(sock)
+        if args.link:
+            # Parse DIR,LO,RI,HOST,PORT[,LANES]
+            parts = [p.strip() for p in args.link.split(',')]
+            if len(parts) < 5:
+                print('invalid --link; expected DIR,LO,RI,HOST,PORT[,LANES]')
+            else:
+                dir_s, lo, ri, h, p, *rest = parts
+                if dir_s.isdigit():
+                    dir_code = int(dir_s) & 0xFF
+                else:
+                    m = {'N':0,'E':1,'S':2,'W':3}
+                    dir_code = m.get(dir_s.upper(), 1)
+                lanes = int(rest[0], 0) if rest else 0
+                do_link(sock, dir_code, lo, ri, h, int(p), lanes)
+        if args.unlink:
+            do_unlink(sock)
 
 
 if __name__ == '__main__':

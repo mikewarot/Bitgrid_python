@@ -41,6 +41,16 @@ See `bitgrid/protocol.py` for pack/parse helpers.
   - payload: none
 - SHUTDOWN (0x09): stop the server listener/process (for test rigs)
   - payload: none
+- LINK (0x0A): request the device to establish an inter-server link to a peer
+  - payload: u8 dir_code (0=N,1=E,2=S,3=W), u8 reserved,
+    u16 local_out_len, bytes local_out_name,
+    u16 remote_in_len, bytes remote_in_name,
+    u16 host_len, bytes host, u16 port, u16 lanes (0=auto)
+  - Notes: current server implements E (local east -> peer west) only.
+- UNLINK (0x0B): tear down any active inter-server link
+  - payload: none
+- LINK_ACK (0x0C): link established
+  - payload: u16 lanes (accepted)
 - ERROR (0x7F): error code + message (u16 code, u8 msg_len, bytes msg)
 
 ## Data streams
@@ -88,3 +98,12 @@ while running:
 ```
 
 This keeps control simple and portable across Pascal/C++/Python.
+
+## Timing and linked forwarding
+
+- The emulator advances in subcycles: A then B. A full cycle is A+B.
+- `STEP`'s `cycles` field is interpreted as subcycles; `cycles=2` advances one full cycle.
+- When devices are linked via `LINK/LINK_ACK`, the reference server can forward seam data each subcycle (A and B) and advance the peer by one subcycle per forward. With `cycles=2`, that yields two seam transfers per `STEP`.
+- If you instead gate forwarding to B-phase only, you get exactly one seam transfer per full cycle.
+
+Rule of thumb: inserting data along an edge of N adjacent cells just before an A subcycle will emerge at the opposite edge after roughly N/2 full cycles (due to the checkerboard), i.e., just before the next A following those cycles. This enables streaming approximately N characters in N + width/2 + a small constant number of cycles when forwarding every subcycle.
