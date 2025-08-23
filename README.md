@@ -1,5 +1,7 @@
 # BitGrid Python Prototype
 
+IMPORTANT: This is *almost entirely written by ChatGPT 5*, not me
+
 A small Python toolchain to:
 
 - Parse a math/bitwise expression into a directed graph.
@@ -11,8 +13,6 @@ A small Python toolchain to:
 Status: prototype focused on bitwise ops (&, |, ^, ~), shifts (<<, >>), add/sub, and multiply via shift-and-add. Signed math is supported by prefixing widths with 's' (e.g., a:s8).
 
 Important: Grid width and height must be even (A/B parity preserved across the array). The emulator evaluates each cell via 16‑bit truth tables (LUT-first), allowing any function of up to 4 inputs per output.
-
-This is *almost entirely written by ChatGPT 5*, not me
 
 ## Quick start
 
