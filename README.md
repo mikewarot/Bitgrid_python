@@ -115,6 +115,20 @@ python -m bitgrid.cli.demo_route4 --width 16 --height 8 --src 0,0 --dst 5,3
 
 It prints whether the bit arrives at the destination output (expected: 1). This uses a simple Manhattan router that inserts ROUTE4 pass-through cells along the path.
 
+### Streaming throughput demo
+
+Measure streaming behavior over a routed path. Use cycles-per-step (cps) to control how many emulator cycles advance per input step. With the current 2-phase model, cps=2 advances one hop per step.
+
+```
+python -m bitgrid.cli.demo_throughput --width 16 --height 8 --src 0,1 --dst 10,6 --train 6 --cps 2
+```
+
+You should see a burst of 1s appear at the destination after a fill latency, then drain to 0s. You can bias the router to prefer straighter paths via a small turn penalty:
+
+```
+python -m bitgrid.cli.demo_throughput --turn 0.25
+```
+
 ## Limits and notes
 
 - Each LUT cell has 4 inputs and 4 outputs. We map operations per bit, usually using one cell/bit for binary ops and one cell/bit for adders (carry ripple vertically).
