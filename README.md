@@ -102,11 +102,25 @@ python -m bitgrid.cli.compile_expr --expr "q = a >> 1" --vars "a:s8" --graph out
 - Program JSON: BitGrid configuration with cells (LUTs), wiring, and I/O mapping. Includes an estimated latency (cycles) for values to propagate.
 - Emulator: performs two-phase updates per cycle; run for `latency` cycles per input vector before sampling outputs.
 
+### Directional routing (ROUTE4) demo
+
+- Each BitGrid cell can also act as a 4-input/4-output directional router using 4 small LUTs (one per direction: N/E/S/W). This enables simultaneous multi-direction pass-through while still allowing logic on other outputs.
+
+- Try a minimal routing demo that wires a constant '1' from a source cell to a destination cell using neighbor-only hops:
+
+```
+python -m bitgrid.cli.demo_route4 --width 16 --height 8 --src 0,0 --dst 5,3
+```
+
+It prints whether the bit arrives at the destination output (expected: 1). This uses a simple Manhattan router that inserts ROUTE4 pass-through cells along the path.
+
 ## Limits and notes
 
 - Each LUT cell has 4 inputs and 4 outputs. We map operations per bit, usually using one cell/bit for binary ops and one cell/bit for adders (carry ripple vertically).
 - Signals can be sourced from global inputs, constants, neighbor outputs, or explicit cell references. The mapper favors vertical carry chains for add.
-- Routing is simplified; long-range cell references are allowed in this prototype. A future improvement is neighbor-only routing.
+- Routing:
+	- Expression-mapped programs: previously allowed long-range references. Work is in progress to enforce neighbor-only routing by inserting ROUTE4 hops.
+	- The current demo uses a simple Manhattan (L-shaped) path and inserts ROUTE4 cells per hop. Congestion handling, parity-aware hops, and rip-up/reroute are planned.
 
 ## Repository layout
 
@@ -114,8 +128,10 @@ python -m bitgrid.cli.compile_expr --expr "q = a >> 1" --vars "a:s8" --graph out
 - `bitgrid/expr_to_graph.py` — parses expression to graph.
 - `bitgrid/mapper.py` — maps graph to BitGrid program JSON.
 - `bitgrid/emulator.py` — two-phase grid emulator.
+- `bitgrid/router.py` — simple Manhattan router that inserts ROUTE4 pass-through cells.
 - `bitgrid/cli/compile_expr.py` — CLI to compile expression to graph/program.
 - `bitgrid/cli/run_emulator.py` — CLI to emulate with CSV I/O.
+- `bitgrid/cli/demo_route4.py` — CLI to demo directional routing with ROUTE4.
 
 ## Branches
 
