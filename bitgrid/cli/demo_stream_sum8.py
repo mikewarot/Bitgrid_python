@@ -102,10 +102,12 @@ def main():
             new_cells.append(cell)
             prev = {"type":"cell","x":x,"y":y,"out":dir_to_idx['E']}
         new_sum_bits.append(prev)
-
-    prog = Program(width=prog.width, height=prog.height, cells=prog.cells + new_cells,
+    # Expand program width if needed to accommodate inserted delay cells
+    max_x = max([c.x for c in (prog.cells + new_cells)] + [0]) + 1
+    new_width = max(prog.width, max_x)
+    prog = Program(width=new_width, height=prog.height, cells=prog.cells + new_cells,
                    input_bits=prog.input_bits, output_bits={**prog.output_bits, 'sum': new_sum_bits},
-                   latency=prog.latency)
+                   latency=new_width + prog.height)
 
     # Stream pairs
     emu = Emulator(prog)
@@ -124,36 +126,22 @@ def main():
         a = int(parts[0], 0)
         b = int(parts[1], 0)
         pairs.append((a & 0xFF, b & 0xFF))
-    steps = [ {'a': a, 'b': b} for (a,b) in pairs ]
-    # Drain zeros to flush the pipeline
-    steps += [ {'a':0,'b':0} for _ in range(16) ]
-
-    # Derive K (max per-bit step lag) from adder placement and parity
-    xs = [c.x for c in prog.cells if c.op == 'ADD_BIT']
-    ys = [c.y for c in prog.cells if c.op == 'ADD_BIT']
-    if not xs or not ys:
-        raise SystemExit('No ADD_BIT cells found')
-    x_add = xs[0]; y_min = min(ys); y_max = max(ys)
-    bit_count = (y_max - y_min + 1)
-    lsb_even = ((x_add + y_min) % 2 == 0)
-    def lag(i: int) -> int:
-        return (i // 2) if lsb_even else ((i + 1) // 2)
-    K = max(lag(i) for i in range(bit_count))
+    # Show derived K if requested
     if args.show_k:
-        print(f"K={K} (lsb_even={lsb_even}) lags={[lag(i) for i in range(bit_count)]} x_add={x_add} y_min={y_min}")
+        print(f"K={K} (lsb_even={lsb_even}) lags={[cycle_i(i) for i in range(bit_count)]} x_add={x_add} y_min={y_min}")
 
-    # Hold each input pair steady for K+1 steps, then sample the sum at the end of the window
+    # Hold-and-sample approach for correctness at cps=2
     hold = K + 1
     replay: List[Dict[str,int]] = []
     for (a,b) in pairs:
         replay.extend([{ 'a': a, 'b': b } for _ in range(hold)])
-    # add a drain block to reset
+    # Drain to flush
     replay.extend([{ 'a': 0, 'b': 0 } for _ in range(hold)])
 
-    samples = emu.run_stream(replay, cycles_per_step=max(1,args.cps), reset=True)
+    samples = emu.run_stream(replay, cycles_per_step=max(1, args.cps), reset=True)
     results: List[int] = []
     for i in range(len(pairs)):
-        idx = (i+1)*hold - 1
+        idx = (i + 1) * hold - 1
         if idx < len(samples):
             results.append(samples[idx].get('sum', 0) & 0xFF)
     for i in range(min(len(results), len(pairs))):
