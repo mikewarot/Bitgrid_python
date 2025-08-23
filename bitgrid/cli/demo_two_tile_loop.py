@@ -70,30 +70,54 @@ def main():
 
     # Parse inputs for left
     seq = [int(tok.strip(), 0) & ((1 << L) - 1) for tok in args.steps.split(',') if tok.strip()]
-    # Initial imported lanes for right (zeros)
-    right_west_prev = [0] * L
+    # Receiver buffers split by parity (even lanes consumed at A, odd lanes at B)
+    buf_even = [0] * L
+    buf_odd = [0] * L
+    even_mask = sum([1 << i for i in range(L) if (i % 2 == 0)])
+    odd_mask = sum([1 << i for i in range(L) if (i % 2 == 1)])
+
+    # For east edge, lanes freshly computed this phase on the left are:
+    # phase A: y where (W-1 + y) % 2 == 0  -> since W even, W-1 odd => y odd
+    # phase B: y where (W-1 + y) % 2 == 1  -> y even
+    def east_indices_fresh(phase: str) -> List[int]:
+        if phase == 'A':
+            return [i for i in range(L) if (i % 2 == 1)]
+        return [i for i in range(L) if (i % 2 == 0)]
+
+    # Capture partial outputs for recombination: even half at A (epoch e), odd half at B (epoch e)
+    even_out_by_epoch: Dict[int, int] = {}
+    odd_out_by_epoch: Dict[int, int] = {}
 
     print(f"lanes={L} (top=bit0) W={W} H={H}")
     for epoch, aval in enumerate(seq):
         # Build per-lane bits for left 'a'
         a_bits = aval
-        # Phase A: feed left a, right uses last imported lanes
-        la = left.run_stream([{"a": a_bits}], cycles_per_step=1, reset=(epoch == 0))[-1]
-        ra = right.run_stream([{"west": sum([(right_west_prev[i] & 1) << i for i in range(L)])}], cycles_per_step=1, reset=(epoch == 0))[-1]
-        # Export east lanes from left after A; these will be used by right on B
+        # Phase A: left computes A; send only freshly computed east lanes (odd indices), buffer on receiver
+        left.run_stream([{"a": a_bits}], cycles_per_step=1, reset=(epoch == 0))
         east_after_a = edge_east_frame(W, H, left)
+        for i in east_indices_fresh('A'):
+            buf_odd[i] = east_after_a[i]
+        # Right consumes even lanes at A using buf_even
+        west_val_A = sum([(buf_even[i] & 1) << i for i in range(L)])
+        ra = right.run_stream([{"west": west_val_A}], cycles_per_step=1, reset=(epoch == 0))[-1]
+        even_out_by_epoch[epoch] = ra.get('out', 0) & even_mask
 
-        # Phase B: left keeps inputs stable within the epoch; right consumes newly arrived east lanes
-        lb = left.run_stream([{"a": a_bits}], cycles_per_step=1, reset=False)[-1]
-        right_west_now = east_after_a  # deliver seam data for B
-        rb = right.run_stream([{"west": sum([(right_west_now[i] & 1) << i for i in range(L)])}], cycles_per_step=1, reset=False)[-1]
+        # Phase B: left computes B; send only freshly computed east lanes (even indices), buffer on receiver
+        left.run_stream([{"a": a_bits}], cycles_per_step=1, reset=False)
+        east_after_b = edge_east_frame(W, H, left)
+        for i in east_indices_fresh('B'):
+            buf_even[i] = east_after_b[i]
+        # Right consumes odd lanes at B using buf_odd
+        west_val_B = sum([(buf_odd[i] & 1) << i for i in range(L)])
+        rb = right.run_stream([{"west": west_val_B}], cycles_per_step=1, reset=False)[-1]
+        odd_out_by_epoch[epoch] = rb.get('out', 0) & odd_mask
 
-        # Sample right's out after B
-        out_val = rb.get('out', 0) & ((1 << L) - 1)
-        print(f"epoch={epoch} a=0x{aval:0{(L+3)//4}X} -> out=0x{out_val:0{(L+3)//4}X}")
-
-        # Prepare import for next epoch A: use east lanes after B
-        right_west_prev = edge_east_frame(W, H, left)
+        # Print partials and aligned when available (aligned for epoch-1 = odd@B of e-1 OR even@A of e)
+        aligned_str = ''
+        if (epoch - 1) in odd_out_by_epoch:
+            aligned = (odd_out_by_epoch[epoch - 1] & odd_mask) | (even_out_by_epoch.get(epoch, 0) & even_mask)
+            aligned_str = f" aligned[e-1]=0x{aligned:0{(L+3)//4}X}"
+        print(f"epoch={epoch} a=0x{aval:0{(L+3)//4}X} A_even=0x{(even_out_by_epoch[epoch] & even_mask):0{(L+3)//4}X} B_odd=0x{(odd_out_by_epoch[epoch] & odd_mask):0{(L+3)//4}X}{aligned_str}")
 
 
 if __name__ == '__main__':

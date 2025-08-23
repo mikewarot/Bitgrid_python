@@ -186,6 +186,21 @@ python -m bitgrid.cli.demo_stream_sum8 --width 64 --height 32 --cps 2 \
 
 You’ll see a line like `K=4 (lsb_even=False) lags=[0,1,1,2,2,3,3,4]` printed (values depend on placement), followed by one sum per input pair.
 
+### Tiled interop demo (two tiles, parity-split seam)
+
+Exchange only the lanes computed in the current phase across a tile seam and recombine on the receiver.
+
+```bash
+python -m bitgrid.cli.demo_two_tile_loop --width 8 --height 8 --lanes 8 --steps "1,3,5,170"
+```
+
+What it shows:
+- Phase A emits odd-index lanes at the east edge (since W is even → x=W-1 is odd, so A updates odd y).
+- Phase B emits even-index lanes.
+- The receiver buffers even/odd halves and submits the appropriate half each subphase. After B, you can recombine to get a fully aligned vector (odd from B of epoch e-1 OR even from A of epoch e). The demo prints per-phase partials and an aligned value when available.
+
+This halves seam bandwidth versus sending both parities every phase, and aligns with the global two-phase barrier described in `docs/tiling-and-interop.md`.
+
 ## Routing pass (neighbor‑only wiring)
 
 Expression‑mapped programs previously allowed long‑range references. A routing pass now inserts ROUTE4 hops to enforce neighbor‑only connections.
