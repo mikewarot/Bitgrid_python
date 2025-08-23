@@ -61,3 +61,20 @@ For MCU links (UART/SPI/I2C), a fixed-size frame with CRC8 is sufficient. For AS
 - Flow control/backpressure for MCU links (retry vs. hold-last-good).
 - Multi-hop tiling latency accounting (global K across tile boundaries).
 - Discoverability/ID and topology enumeration for dynamic mesh assemblies.
+
+## Global two-phase barrier ("done" signal) 
+Because tile dimensions are even, A/B parity aligns across tiles. We can coordinate phases system-wide with a simple distributed barrier per epoch (cycle) and subphase (A or B):
+
+- Define an epoch counter `e` and subphase `p ∈ {A,B}`.
+- Each tile performs local compute for (e,p), produces edge frames, then asserts `done(e,p)` to its four neighbors.
+- A tile may advance to the next subphase only when it has observed `done(e,p)` from all of its neighbors (or fewer, for edge/corner tiles) and has completed its own compute.
+- After `p=A` completes everywhere, the system advances to `p=B`; after `p=B`, increment `e`.
+
+Timing implications:
+- LUT evaluation time is constant; with cps=2, the compute time is dominated by inter-tile exchange + barrier signaling.
+- The subphase time ≈ max(local_compute) + link_exchange + neighbor-done handshake. With uniform tiles, it reduces to link + handshake time.
+
+Implementation notes:
+- Pack a tiny header with `epoch, phase` into the link frames, or piggyback `done` on a separate minimal control frame (1 byte + CRC).
+- On MCUs, use double-buffered edge registers: while computing A, you hold last cycle’s imports stable and build next exports; after barrier, swap buffers.
+- On ASIC, a global clock-enable per subphase or a small four-neighbor ready/valid ring achieves the same effect.
