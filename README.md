@@ -129,6 +129,16 @@ You should see a burst of 1s appear at the destination after a fill latency, the
 python -m bitgrid.cli.demo_throughput --turn 0.25
 ```
 
+### Edge streaming I/O (Hello World)
+
+Send ASCII text as 8 parallel bits from the west edge across 8 lanes and read it back on the east edge.
+
+```
+python -m bitgrid.cli.demo_edge_io_hello --width 16 --height 8 --row 0 --len 10 --cps 2 --text "Hello World"
+```
+
+The demo prints the recovered text after the pipeline fills.
+
 ## Limits and notes
 
 - Each LUT cell has 4 inputs and 4 outputs. We map operations per bit, usually using one cell/bit for binary ops and one cell/bit for adders (carry ripple vertically).
