@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, List, Tuple, Optional
+import heapq
 from .program import Cell, Program
 
 
@@ -42,32 +43,48 @@ class ManhattanRouter:
         return (0 <= x < self.W and 0 <= y < self.H and not self.occ[x][y])
 
     def route(self, src: Tuple[int,int], dst: Tuple[int,int]) -> List[Tuple[int,int]]:
-        # simple L-shaped path: horizontal then vertical
-        x0, y0 = src
-        x1, y1 = dst
-        path: List[Tuple[int,int]] = []
-        x = x0
-        step = 1 if x1 >= x0 else -1
-        while x != x1:
-            x += step
-            if not self.is_free(x, y0):
-                raise RuntimeError(f"Blocked at {(x,y0)}")
-            path.append((x, y0))
-        y = y0
-        step = 1 if y1 >= y0 else -1
-        while y != y1:
-            y += step
-            if not self.is_free(x1, y):
-                raise RuntimeError(f"Blocked at {(x1,y)}")
-            path.append((x1, y))
-        return path
+        # A* Manhattan routing with 4-neighbor moves and simple occupancy
+        sx, sy = src
+        tx, ty = dst
+        def h(x: int, y: int) -> int:
+            return abs(x - tx) + abs(y - ty)
+        openh: List[Tuple[int, Tuple[int,int]]] = []
+        heapq.heappush(openh, (h(sx, sy), (sx, sy)))
+        gscore: Dict[Tuple[int,int], int] = {(sx, sy): 0}
+        came: Dict[Tuple[int,int], Tuple[int,int]] = {}
+        closed: set[Tuple[int,int]] = set()
+        while openh:
+            _, (x, y) = heapq.heappop(openh)
+            if (x, y) in closed:
+                continue
+            if (x, y) == (tx, ty):
+                # reconstruct excluding the start
+                path: List[Tuple[int,int]] = []
+                cur = (x, y)
+                while cur != (sx, sy):
+                    path.append(cur)
+                    cur = came[cur]
+                path.reverse()
+                return path
+            closed.add((x, y))
+            for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+                nx, ny = x+dx, y+dy
+                if not self.is_free(nx, ny) and (nx, ny) != (tx, ty):
+                    continue
+                ng = gscore[(x, y)] + 1
+                if ng < gscore.get((nx, ny), 1<<30):
+                    gscore[(nx, ny)] = ng
+                    came[(nx, ny)] = (x, y)
+                    heapq.heappush(openh, (ng + h(nx, ny), (nx, ny)))
+        raise RuntimeError("No route found")
 
-    def wire_with_route4(self, src_cell: Tuple[int,int], dst_cell: Tuple[int,int]) -> List[Cell]:
+    def wire_with_route4(self, src_cell: Tuple[int,int], dst_cell: Tuple[int,int]) -> Tuple[List[Cell], str]:
         # Insert ROUTE4 cells along path from src to dst, using pass-through in the travel direction
         path = self.route(src_cell, dst_cell)
         cells: List[Cell] = []
         prev_src = {"type": "cell", "x": src_cell[0], "y": src_cell[1], "out": 0}
         cur = (src_cell[0], src_cell[1])
+        last_dir = 'E'
         for nxt in path:
             dx = nxt[0] - cur[0]
             dy = nxt[1] - cur[1]
@@ -92,5 +109,6 @@ class ManhattanRouter:
             cell = Cell(x=x, y=y, inputs=inputs, op='ROUTE4', params={'luts': luts})
             cells.append(cell)
             prev_src = {"type": "cell", "x": x, "y": y, "out": pin_map[direction]}
+            last_dir = direction
             cur = nxt
-        return cells
+        return cells, last_dir

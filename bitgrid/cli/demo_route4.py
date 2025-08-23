@@ -28,19 +28,10 @@ def main():
 
     router = ManhattanRouter(W, H)
     router.occupy(sx, sy)
-    route_cells = router.wire_with_route4((sx, sy), (dx, dy))
+    route_cells, last_dir = router.wire_with_route4((sx, sy), (dx, dy))
     cells.extend(route_cells)
-
-    # Determine final hop direction to select correct output index at destination
-    out_idx = 0
-    if dx > sx and dy == sy:
-        out_idx = 1  # E
-    elif dx < sx and dy == sy:
-        out_idx = 3  # W
-    elif dy > sy:
-        out_idx = 2  # S
-    elif dy < sy:
-        out_idx = 0  # N
+    dir_to_idx = {'N':0,'E':1,'S':2,'W':3}
+    out_idx = dir_to_idx.get(last_dir, 1)
 
     prog = Program(width=W, height=H, cells=cells,
                    input_bits={"dummy": []},
