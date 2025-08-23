@@ -52,6 +52,7 @@ def main():
     ap.add_argument('--height', type=int, default=32)
     ap.add_argument('--cps', type=int, default=2)
     ap.add_argument('--pairs', type=str, default='(1,2),(3,4),(10,20),(255,1)')
+    ap.add_argument('--show-k', action='store_true', help='Print derived latency K and two-phase parity info')
     args = ap.parse_args()
 
     W, H = args.width, args.height
@@ -138,6 +139,8 @@ def main():
     def lag(i: int) -> int:
         return (i // 2) if lsb_even else ((i + 1) // 2)
     K = max(lag(i) for i in range(bit_count))
+    if args.show_k:
+        print(f"K={K} (lsb_even={lsb_even}) lags={[lag(i) for i in range(bit_count)]} x_add={x_add} y_min={y_min}")
 
     # Hold each input pair steady for K+1 steps, then sample the sum at the end of the window
     hold = K + 1
