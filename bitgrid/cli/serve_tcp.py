@@ -13,6 +13,7 @@ from ..protocol import (
     encode_name_u64_map,
     decode_name_u64_map,
     payload_hello,
+    payload_step,
     parse_link_payload,
 )
 
@@ -185,8 +186,9 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                         cycles = struct.unpack('<I', payload[:4])[0]
                     else:
                         cycles = 1
+                    forwarded = (frame.get('flags', 0) != 0)
                     # If any links, interleave local and peers steps according to forwarding policy.
-                    if links:
+                    if links and not forwarded:
                         # Group links by peer socket to avoid over-stepping the same peer per subcycle
                         # Make a stable snapshot of current links
                         link_items = list(links.items())
@@ -247,16 +249,17 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                                     except Exception:
                                         pass
                                 try:
-                                    psock.sendall(pack_frame(MsgType.STEP, b"\x01\x00\x00\x00"))
+                                    psock.sendall(pack_frame(MsgType.STEP, payload_step(1), flags=1))
                                 except Exception:
                                     pass
                         if verbose:
-                            print(f'[srv] step(linked*): {cycles} on {len(link_items)} link(s)')
+                            print(f"[srv] step(linked*): {cycles} on {len(link_items)} link(s)")
                     else:
                         with lock:
                             emu.run_stream([current_inputs], cycles_per_step=cycles, reset=False)
                         if verbose:
-                            print(f'[srv] step: {cycles}')
+                            suffix = ' (fwd)' if forwarded else ''
+                            print(f"[srv] step: {cycles}{suffix}")
                 elif mtype == MsgType.GET_OUTPUTS:
                     with lock:
                         outputs = emu.sample_outputs(current_inputs)
