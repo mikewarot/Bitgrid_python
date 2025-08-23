@@ -71,7 +71,6 @@ def _get_outputs(sock: socket.socket, timeout: float = 3.0) -> Dict[str, int]:
 
 
 class TestIdentityLinkedDuplex(unittest.TestCase):
-    @unittest.skip("Full-duplex over two links not yet supported without re-entry guard in server; skipping for now.")
     def test_identity_9bit_linked_duplex(self):
         with tempfile.TemporaryDirectory() as td:
             prog = build_identity_program(16, 10, lanes=9, row0=0)
