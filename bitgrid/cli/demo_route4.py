@@ -15,6 +15,8 @@ def main():
     args = ap.parse_args()
 
     W, H = args.width, args.height
+    if W % 2 or H % 2:
+        raise SystemExit("Grid width and height must be even.")
     sx, sy = map(int, args.src.split(','))
     dx, dy = map(int, args.dst.split(','))
 

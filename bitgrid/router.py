@@ -28,6 +28,8 @@ def route_luts(out_dir: str, in_pin: str) -> List[int]:
 
 class ManhattanRouter:
     def __init__(self, width: int, height: int):
+        if width % 2 != 0 or height % 2 != 0:
+            raise ValueError("Grid dimensions must be even (width and height)")
         self.W = width
         self.H = height
         self.occ = [[False for _ in range(self.H)] for _ in range(self.W)]

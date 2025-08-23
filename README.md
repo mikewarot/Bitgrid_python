@@ -101,6 +101,7 @@ python -m bitgrid.cli.compile_expr --expr "q = a >> 1" --vars "a:s8" --graph out
 - Graph JSON: a high-level DAG of multi-bit operations.
 - Program JSON: BitGrid configuration with cells (LUTs), wiring, and I/O mapping. Includes an estimated latency (cycles) for values to propagate.
 - Emulator: performs two-phase updates per cycle; run for `latency` cycles per input vector before sampling outputs.
+ - Timing note: BitGrid dimensions are always even (width and height) to preserve A/B parity across the array.
 
 ### Directional routing (ROUTE4) demo
 
