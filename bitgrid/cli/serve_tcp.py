@@ -255,7 +255,7 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                     conn.sendall(pack_frame(MsgType.OUTPUTS, outp, seq=seq))
                     seq = (seq + 1) & 0xFFFF
                 elif mtype == MsgType.LINK:
-                    # Establish server-to-server seam link (currently supports dir E: local east -> peer west)
+                    # Establish server-to-server seam link (supports N/E/S/W)
                     try:
                         cfg = parse_link_payload(payload)
                     except Exception as e:
@@ -263,13 +263,8 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                             print(f'[srv] LINK parse error: {e}')
                         continue
                     dir_code = int(cfg.get('dir_code', 1))
-                    if dir_code != 1:
-                        if verbose:
-                            print('[srv] LINK unsupported dir (only E currently)')
-                        # reply with ERROR
-                        from ..protocol import payload_error
-                        conn.sendall(pack_frame(MsgType.ERROR, payload_error(2, 'LINK dir unsupported')))
-                        continue
+                    dir_map = {0: 'N', 1: 'E', 2: 'S', 3: 'W'}
+                    dir_char = dir_map.get(dir_code, 'E')
                     host = str(cfg.get('host', '127.0.0.1'))
                     port = int(cfg.get('port', 0))
                     local_out_name = str(cfg.get('local_out', 'east'))
@@ -284,20 +279,40 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                         obits = prog.output_bits.get(local_out_name, [])
                         if not obits:
                             raise RuntimeError(f"unknown local_out '{local_out_name}'")
-                        # Assume all bits map to the same x (seam column) and consecutive y's
-                        seam_x = int(obits[0].get('x', 0)) if isinstance(obits[0], dict) else 0
-                        y_vals = [int(b.get('y', 0)) for b in obits if isinstance(b, dict)]
-                        row0 = min(y_vals) if y_vals else 0
-                        lanes_map = len(obits)
-                        lanes = lanes_req if lanes_req > 0 else min(lanes_map, ph)
-                        # Fresh indices per phase depend on seam_x parity and absolute y=row0+i
-                        idxA = [i for i in range(lanes) if ((seam_x + (row0 + i)) % 2 == 0)]
-                        idxB = [i for i in range(lanes) if ((seam_x + (row0 + i)) % 2 == 1)]
+                        # Collect coords per bit if present; otherwise synthesize based on direction
+                        coords: List[Tuple[int,int]] = []
+                        for i, b in enumerate(obits):
+                            if isinstance(b, dict) and ('x' in b and 'y' in b):
+                                try:
+                                    coords.append((int(b.get('x', 0)), int(b.get('y', 0))))
+                                except Exception:
+                                    coords.append((0, 0))
+                            else:
+                                # Synthesize sensible coords based on direction and bit index
+                                if dir_char in ('E', 'W'):
+                                    sx = prog.width - 1 if dir_char == 'E' else 0
+                                    coords.append((sx, i))
+                                else:
+                                    sy = 0 if dir_char == 'N' else (prog.height - 1)
+                                    coords.append((i, sy))
+                        lanes_map = len(coords)
+                        # Max lanes constrained by peer seam length (vertical -> peer.height, horizontal -> peer.width)
+                        max_peer = ph if dir_char in ('E', 'W') else pw
+                        lanes = lanes_req if lanes_req > 0 else min(lanes_map, max_peer)
+                        # Fresh indices per phase depend on parity of x+y for each bit
+                        idxA: List[int] = []
+                        idxB: List[int] = []
+                        for i in range(lanes):
+                            x, y = coords[i]
+                            if ((x + y) % 2) == 0:
+                                idxA.append(i)
+                            else:
+                                idxB.append(i)
                         link = {
                             'sock': psock,
                             'host': host,
                             'port': port,
-                            'dir': 'E',
+                            'dir': dir_char,
                             'local_out': local_out_name,
                             'remote_in': remote_in_name,
                             'lanes': lanes,
@@ -313,7 +328,7 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                         from ..protocol import payload_link_ack
                         conn.sendall(pack_frame(MsgType.LINK_ACK, payload_link_ack(lanes)))
                         if verbose:
-                            print(f"[srv] LINK established: local.east='{local_out_name}' -> peer {host}:{port} input '{remote_in_name}', lanes={lanes}")
+                            print(f"[srv] LINK established: dir={dir_char} local_out='{local_out_name}' -> peer {host}:{port} input '{remote_in_name}', lanes={lanes}")
                     except Exception as e:
                         if verbose:
                             print(f'[srv] LINK failed: {e}')
