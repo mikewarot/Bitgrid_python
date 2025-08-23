@@ -3,7 +3,7 @@ from __future__ import annotations
 import socket, subprocess, sys, tempfile, time, unittest
 from typing import Dict, Tuple, List
 
-from bitgrid.cli.make_identity_program import build_identity_program
+from bitgrid.cli.make_identity_program import build_inout_program
 from bitgrid.protocol import (
     pack_frame, try_parse_frame, MsgType,
     encode_name_u64_map, decode_name_u64_map,
@@ -73,7 +73,7 @@ def _get_outputs(sock: socket.socket, timeout: float = 3.0) -> Dict[str, int]:
 class TestIdentityLinkedDuplex(unittest.TestCase):
     def test_identity_9bit_linked_duplex(self):
         with tempfile.TemporaryDirectory() as td:
-            prog = build_identity_program(16, 10, lanes=9, row0=0)
+            prog = build_inout_program(16, 10, lanes=9)
             lp = _free_port(); rp = _free_port()
             left_path = td + '/left.json'; right_path = td + '/right.json'
             prog.save(left_path); prog.save(right_path)
@@ -100,14 +100,14 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                 right = _connect('127.0.0.1', rp)
                 try:
                     # Establish links in both directions
-                    payload_lr = payload_link(1, 'east', 'west', '127.0.0.1', rp, lanes=0)
+                    payload_lr = payload_link(1, 'east_out', 'west_in', '127.0.0.1', rp, lanes=0)
                     left.sendall(pack_frame(MsgType.LINK, payload_lr))
                     resp1 = _send_and_recv(left, b'', timeout=3.0)
                     if resp1 is None:
                         self.fail('No LINK_ACK from left for left->right link')
                     self.assertEqual(resp1.get('type'), MsgType.LINK_ACK)
 
-                    payload_rl = payload_link(1, 'east', 'west', '127.0.0.1', lp, lanes=0)
+                    payload_rl = payload_link(1, 'east_out', 'west_in', '127.0.0.1', lp, lanes=0)
                     right.sendall(pack_frame(MsgType.LINK, payload_rl))
                     resp2 = _send_and_recv(right, b'', timeout=3.0)
                     if resp2 is None:
@@ -125,10 +125,10 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                         # Drive inputs for this symbol on both ends (if any remain)
                         if i < len(msgL):
                             frameL = (1 << 8) | (ord(msgL[i]) & 0xFF)
-                            _set_inputs(left, {'west': frameL})
+                            _set_inputs(left, {'west_in': frameL})
                         if i < len(msgR):
                             frameR = (1 << 8) | (ord(msgR[i]) & 0xFF)
-                            _set_inputs(right, {'west': frameR})
+                            _set_inputs(right, {'west_in': frameR})
                         # Step only the left; it will step the right as part of link forwarding
                         _step(left, cps)
                         # Poll receivers on both ends
@@ -138,13 +138,13 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                         while time.time() < deadline and not (gotR and gotL):
                             if not gotR:
                                 mR = _get_outputs(right, timeout=0.5)
-                                eastR = int(mR.get('east', 0))
+                                eastR = int(mR.get('east_in', 0))
                                 if ((eastR >> 8) & 1) == 1:
                                     outR.append(eastR & 0xFF)
                                     gotR = True
                             if not gotL:
                                 mL = _get_outputs(left, timeout=0.5)
-                                eastL = int(mL.get('east', 0))
+                                eastL = int(mL.get('east_in', 0))
                                 if ((eastL >> 8) & 1) == 1:
                                     outL.append(eastL & 0xFF)
                                     gotL = True
@@ -153,15 +153,15 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                         self.assertTrue(gotR and gotL, 'Did not observe present on one or both ends in time')
                         # Clear both ends for next symbol
                         if i < len(msgL):
-                            _set_inputs(left, {'west': 0})
+                            _set_inputs(left, {'west_in': 0})
                         if i < len(msgR):
-                            _set_inputs(right, {'west': 0})
+                            _set_inputs(right, {'west_in': 0})
                         _step(left, cps)
                         # Wait for present to drop on both ends
                         deadline2 = time.time() + 1.0
                         while time.time() < deadline2:
-                            okR = True if i >= len(msgL) else (((int(_get_outputs(right).get('east', 0)) >> 8) & 1) == 0)
-                            okL = True if i >= len(msgR) else (((int(_get_outputs(left).get('east', 0)) >> 8) & 1) == 0)
+                            okR = True if i >= len(msgL) else (((int(_get_outputs(right).get('east_in', 0)) >> 8) & 1) == 0)
+                            okL = True if i >= len(msgR) else (((int(_get_outputs(left).get('east_in', 0)) >> 8) & 1) == 0)
                             if okR and okL:
                                 break
                             time.sleep(0.005)

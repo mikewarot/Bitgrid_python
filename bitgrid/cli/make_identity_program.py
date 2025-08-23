@@ -34,7 +34,7 @@ def build_identity_program_edges(width: int, height: int, src: str, dst: str, la
 
 
 def build_identity_program_4way(width: int, height: int, lanes: int = 9) -> Program:
-    """Zero-latency identity for all four edges: east<-west, west<-east, south<-north, north<-south."""
+    """Zero-latency identity for all four edges: each output mirrors the same-named input."""
     if width % 2 or height % 2:
         raise ValueError('Grid width and height must be even.')
     if lanes <= 0:
@@ -47,11 +47,40 @@ def build_identity_program_4way(width: int, height: int, lanes: int = 9) -> Prog
         'south': [ {'type':'input','name':'south','bit':i} for i in range(lanes) ],
     }
     output_bits = {
-        'east':  [ {'type':'input','name':'west','bit':i}  for i in range(lanes) ],
-        'west':  [ {'type':'input','name':'east','bit':i}  for i in range(lanes) ],
-        'south': [ {'type':'input','name':'north','bit':i} for i in range(lanes) ],
-        'north': [ {'type':'input','name':'south','bit':i} for i in range(lanes) ],
+        'east':  [ {'type':'input','name':'east','bit':i}  for i in range(lanes) ],
+        'west':  [ {'type':'input','name':'west','bit':i}  for i in range(lanes) ],
+        'south': [ {'type':'input','name':'south','bit':i} for i in range(lanes) ],
+        'north': [ {'type':'input','name':'north','bit':i} for i in range(lanes) ],
     }
+    return Program(width=width, height=height, cells=cells, input_bits=input_bits, output_bits=output_bits, latency=0)
+
+
+def build_edge_mirror(width: int, height: int, edge: str, lanes: int = 9) -> Program:
+    """Zero-latency identity for a single edge: output[edge] mirrors input[edge]."""
+    if width % 2 or height % 2:
+        raise ValueError('Grid width and height must be even.')
+    if lanes <= 0:
+        raise ValueError('lanes must be > 0')
+    edge = str(edge)
+    cells: List[Cell] = []
+    input_bits = {edge: [ {'type':'input','name':edge,'bit':i} for i in range(lanes) ]}
+    output_bits = {edge: [ {'type':'input','name':edge,'bit':i} for i in range(lanes) ]}
+    return Program(width=width, height=height, cells=cells, input_bits=input_bits, output_bits=output_bits, latency=0)
+
+
+def build_inout_program(width: int, height: int, lanes: int = 9) -> Program:
+    """Zero-latency program with 8 channel names: *_in and *_out for N/E/S/W.
+    Each output mirrors the identically named input, so tests can both drive and observe per channel.
+    Channels: west_in, east_in, north_in, south_in, west_out, east_out, north_out, south_out
+    """
+    if width % 2 or height % 2:
+        raise ValueError('Grid width and height must be even.')
+    if lanes <= 0:
+        raise ValueError('lanes must be > 0')
+    cells: List[Cell] = []
+    names = ['west_in','east_in','north_in','south_in','west_out','east_out','north_out','south_out']
+    input_bits = { name: [ {'type':'input','name':name,'bit':i} for i in range(lanes) ] for name in names }
+    output_bits = { name: [ {'type':'input','name':name,'bit':i} for i in range(lanes) ] for name in names }
     return Program(width=width, height=height, cells=cells, input_bits=input_bits, output_bits=output_bits, latency=0)
 
 

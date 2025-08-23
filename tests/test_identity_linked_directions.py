@@ -3,7 +3,7 @@ from __future__ import annotations
 import socket, subprocess, sys, tempfile, time, unittest
 from typing import Dict, Tuple, List
 
-from bitgrid.cli.make_identity_program import build_identity_program_edges, build_identity_program_4way
+from bitgrid.cli.make_identity_program import build_identity_program_4way, build_edge_mirror
 from bitgrid.protocol import (
     pack_frame, try_parse_frame, MsgType,
     encode_name_u64_map, decode_name_u64_map,
@@ -71,13 +71,13 @@ def _get_outputs(sock: socket.socket, timeout: float = 3.0) -> Dict[str, int]:
 
 
 class TestLinkedDirections(unittest.TestCase):
-    def _run_dir(self, dir_code: int, src: str, dst: str):
-        """Start two servers, link src->dst by dir, and stream a short message using present+data on the src input."""
+    def _run_dir(self, dir_code: int, local_edge: str, remote_edge: str):
+        """Start two servers, link local_edge(out)->remote_edge(in) by dir, and stream a short message using present+data on the local edge input."""
         with tempfile.TemporaryDirectory() as td:
             lp = _free_port(); rp = _free_port()
-            # Left emits on src; Right reads on dst side mapping
-            left_prog = build_identity_program_edges(16, 10, src, dst, lanes=9)
-            right_prog = build_identity_program_edges(16, 10, src, dst, lanes=9)
+            # Mirror on same-named edges: left outputs local_edge, right latches remote_edge
+            left_prog = build_edge_mirror(16, 10, local_edge, lanes=9)
+            right_prog = build_edge_mirror(16, 10, remote_edge, lanes=9)
             left_path = td + '/left.json'; right_path = td + '/right.json'
             left_prog.save(left_path); right_prog.save(right_path)
 
@@ -103,7 +103,7 @@ class TestLinkedDirections(unittest.TestCase):
                 right = _connect('127.0.0.1', rp)
                 try:
                     # Link left(src) -> right(dst)
-                    payload = payload_link(dir_code, src, dst, '127.0.0.1', rp, lanes=0)
+                    payload = payload_link(dir_code, local_edge, remote_edge, '127.0.0.1', rp, lanes=0)
                     left.sendall(pack_frame(MsgType.LINK, payload))
                     resp = _send_and_recv(left, b'', timeout=3.0)
                     if resp is None:
@@ -115,14 +115,14 @@ class TestLinkedDirections(unittest.TestCase):
                     out: List[int] = []
                     for ch in message:
                         frame = (1 << 8) | (ord(ch) & 0xFF)
-                        _set_inputs(left, {src: frame})
+                        _set_inputs(left, {local_edge: frame})
                         _step(left, cps)
                         # Poll right on dst
                         deadline = time.time() + 1.0
                         captured = False
                         while time.time() < deadline:
                             m = _get_outputs(right, timeout=0.5)
-                            seam = int(m.get(dst, 0))
+                            seam = int(m.get(remote_edge, 0))
                             present = (seam >> 8) & 1
                             data = seam & 0xFF
                             if present == 1:
@@ -131,13 +131,13 @@ class TestLinkedDirections(unittest.TestCase):
                                 break
                             time.sleep(0.005)
                         self.assertTrue(captured, 'No present observed at receiver in time')
-                        _set_inputs(left, {src: 0})
+                        _set_inputs(left, {local_edge: 0})
                         _step(left, cps)
                         # Wait for present to drop
                         deadline2 = time.time() + 1.0
                         while time.time() < deadline2:
                             m2 = _get_outputs(right, timeout=0.5)
-                            if ((int(m2.get(dst, 0)) >> 8) & 1) == 0:
+                            if ((int(m2.get(remote_edge, 0)) >> 8) & 1) == 0:
                                 break
                             time.sleep(0.005)
                     text = ''.join(chr(b) for b in out[:len(message)])
@@ -167,15 +167,15 @@ class TestLinkedDirections(unittest.TestCase):
                             p.kill()
 
     def test_north(self):
-        # north: local_out='north' -> peer remote_in='south'
+        # north seam: left local_out='north' -> right remote_in='south'
         self._run_dir(0, 'north', 'south')
 
     def test_west(self):
-        # west: local_out='west' -> peer remote_in='east'
+        # west seam: left local_out='west' -> right remote_in='east'
         self._run_dir(3, 'west', 'east')
 
     def test_south(self):
-        # south: local_out='south' -> peer remote_in='north'
+        # south seam: left local_out='south' -> right remote_in='north'
         self._run_dir(2, 'south', 'north')
 
 
