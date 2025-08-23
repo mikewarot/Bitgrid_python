@@ -171,6 +171,21 @@ i=3: a=255 b=1 -> sum=0x00
 Notes:
 - For fully pipelined 1‑per‑step streaming, either increase cps to cover the ripple depth or implement pipeline registers in the adder and/or add explicit ROUTE4 delays to align bit arrivals.
 
+How it works:
+- Two‑phase timing means neighbors exchange data once per full cycle; vertical ripple in the adder causes MSB sum bits to stabilize a few steps after LSBs.
+- Let the LSB row be at y_min and the adder column at x_add. If (x_add + y_min) is even, the LSB updates in phase A; otherwise in phase B. The per‑bit step lag is:
+	- lag(i) = i//2 if LSB is even, else lag(i) = (i+1)//2, with i = bit index (0..7).
+- K = max(lag(i)) over all bits. By holding inputs for K+1 steps, every bit of the sum has time to settle; sampling at the end of the window gives the correct sum.
+
+Try it with visibility:
+
+```bash
+python -m bitgrid.cli.demo_stream_sum8 --width 64 --height 32 --cps 2 \
+	--pairs "(1,2),(3,4),(10,20),(255,1)" --show-k
+```
+
+You’ll see a line like `K=4 (lsb_even=False) lags=[0,1,1,2,2,3,3,4]` printed (values depend on placement), followed by one sum per input pair.
+
 ## Routing pass (neighbor‑only wiring)
 
 Expression‑mapped programs previously allowed long‑range references. A routing pass now inserts ROUTE4 hops to enforce neighbor‑only connections.
