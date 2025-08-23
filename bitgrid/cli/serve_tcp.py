@@ -44,10 +44,10 @@ class LinkState(TypedDict):
     last_sent: int
 
 
-def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inputs: Dict[str, int], sessions: Dict[int, Dict], link_box: Dict[str, Optional[LinkState]], lock: threading.Lock, preloaded_bitstream: bytes | None = None, verbose: bool = True, shutdown_event: threading.Event | None = None, link_forward: str = 'both') -> None:
+def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inputs: Dict[str, int], sessions: Dict[int, Dict], link_box: Dict[str, Dict[str, LinkState]], lock: threading.Lock, preloaded_bitstream: bytes | None = None, verbose: bool = True, shutdown_event: threading.Event | None = None, link_forward: str = 'both') -> None:
     conn.settimeout(1.0)
-    # Link state reference (shared)
-    link: Optional[LinkState] = link_box.get('state')
+    # Link states reference (shared); key -> LinkState
+    links: Dict[str, LinkState] = link_box.get('links', {})
 
     # Helpers for built-in bridging on east seam (left.east -> right.west)
     def _east_fresh_indices(width: int, height: int, phase: str):
@@ -185,64 +185,73 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                         cycles = struct.unpack('<I', payload[:4])[0]
                     else:
                         cycles = 1
-                    # If linked, interleave local and peer steps according to forwarding policy.
-                    if link is not None and link.get('sock') is not None:
-                        lp_sock: socket.socket = link['sock']
-                        lanes: int = link['lanes']
-                        local_out_name: str = link['local_out']
-                        remote_in_name: str = link['remote_in']
-                        cyc: int = link['cycle']
-                        last_sent: int = link.get('last_sent', 0)
-                        # Precompute masks for A/B if needed
-                        maskA = 0
-                        maskB = 0
-                        if link_forward == 'phase':
-                            for i in link.get('idxA', []):
-                                maskA |= (1 << int(i))
-                            for i in link.get('idxB', []):
-                                maskB |= (1 << int(i))
+                    # If any links, interleave local and peers steps according to forwarding policy.
+                    if links:
+                        # Group links by peer socket to avoid over-stepping the same peer per subcycle
+                        # Make a stable snapshot of current links
+                        link_items = list(links.items())
                         for _ in range(int(cycles)):
                             with lock:
                                 emu.run_stream([current_inputs], cycles_per_step=1, reset=False)
                             with lock:
                                 outs = emu.sample_outputs(current_inputs)
-                            v = int(outs.get(local_out_name, 0))
-                            send_now = True
-                            send_val = v
-                            if link_forward == 'phase':
-                                # Only update lanes fresh on this subcycle; preserve others from last_sent
-                                if (cyc & 1) == 0:  # A phase
-                                    send_val = (last_sent & ~maskA) | (v & maskA)
-                                else:  # B phase
-                                    send_val = (last_sent & ~maskB) | (v & maskB)
-                                last_sent = send_val
-                            elif link_forward in ('cycle', 'bonly'):
-                                # Only send on B subcycle (reduce frames by ~2x)
-                                if (cyc & 1) == 0:
-                                    send_now = False
+                            # Build groups: sock -> list[(key, linkstate, send_val_or_None)]
+                            peer_groups: Dict[socket.socket, List[Tuple[str, LinkState, Optional[int]]]] = {}
+                            for key, lk in link_items:
+                                lp_sock = lk['sock']
+                                local_out_name = lk['local_out']
+                                remote_in_name = lk['remote_in']
+                                v = int(outs.get(local_out_name, 0))
+                                cyc = lk['cycle']
+                                last_sent = lk.get('last_sent', 0)
+                                # Masks per link (compute once lazily)
+                                maskA = maskB = 0
+                                if link_forward == 'phase':
+                                    for i in lk.get('idxA', []):
+                                        maskA |= (1 << int(i))
+                                    for i in lk.get('idxB', []):
+                                        maskB |= (1 << int(i))
+                                send_now = True
+                                send_val: Optional[int] = v
+                                if link_forward == 'phase':
+                                    if (cyc & 1) == 0:
+                                        send_val = (last_sent & ~maskA) | (v & maskA)
+                                    else:
+                                        send_val = (last_sent & ~maskB) | (v & maskB)
+                                    last_sent = send_val
+                                elif link_forward in ('cycle', 'bonly'):
+                                    if (cyc & 1) == 0:
+                                        send_now = False
+                                        send_val = None
+                                    else:
+                                        last_sent = v
+                                        send_val = v
                                 else:
                                     last_sent = v
-                                    send_val = v
-                            else:
-                                # both: always send full value
-                                last_sent = v
-                            if send_now:
+                                # Update per-link state for next subcycle
+                                lk['last_sent'] = last_sent
+                                lk['cycle'] = cyc + 1
+                                if send_now:
+                                    if lp_sock not in peer_groups:
+                                        peer_groups[lp_sock] = []
+                                    # Store tuple with remote_in name via linkstate
+                                    peer_groups[lp_sock].append((key, lk, send_val))
+                            # Emit to peers: for each peer, send all SET_INPUTS then one STEP
+                            for psock, items in peer_groups.items():
+                                for _key, lk, sval in items:
+                                    try:
+                                        if sval is None:
+                                            continue
+                                        kv = {lk['remote_in']: int(sval)}
+                                        psock.sendall(pack_frame(MsgType.SET_INPUTS, encode_name_u64_map(kv)))
+                                    except Exception:
+                                        pass
                                 try:
-                                    kv = {remote_in_name: send_val}
-                                    lp_sock.sendall(pack_frame(MsgType.SET_INPUTS, encode_name_u64_map(kv)))
+                                    psock.sendall(pack_frame(MsgType.STEP, b"\x01\x00\x00\x00"))
                                 except Exception:
                                     pass
-                            # Always advance the peer by one subcycle to stay in sync
-                            try:
-                                lp_sock.sendall(pack_frame(MsgType.STEP, b"\x01\x00\x00\x00"))
-                            except Exception:
-                                pass
-                            cyc += 1
-                        # Persist updated state
-                        link['cycle'] = cyc
-                        link['last_sent'] = last_sent
                         if verbose:
-                            print(f'[srv] step(linked): {cycles}')
+                            print(f'[srv] step(linked*): {cycles} on {len(link_items)} link(s)')
                     else:
                         with lock:
                             emu.run_stream([current_inputs], cycles_per_step=cycles, reset=False)
@@ -308,6 +317,8 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                                 idxA.append(i)
                             else:
                                 idxB.append(i)
+                        # Create and store new link under a stable key
+                        link_key = f"{dir_char}:{local_out_name}->{host}:{port}:{remote_in_name}"
                         link = {
                             'sock': psock,
                             'host': host,
@@ -324,29 +335,30 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                             'last_sent': 0,
                         }
                         # Save back to shared box and ACK
-                        link_box['state'] = link
+                        links[link_key] = link
+                        link_box['links'] = links
                         from ..protocol import payload_link_ack
                         conn.sendall(pack_frame(MsgType.LINK_ACK, payload_link_ack(lanes)))
                         if verbose:
-                            print(f"[srv] LINK established: dir={dir_char} local_out='{local_out_name}' -> peer {host}:{port} input '{remote_in_name}', lanes={lanes}")
+                            print(f"[srv] LINK established: key='{link_key}', lanes={lanes}")
                     except Exception as e:
                         if verbose:
                             print(f'[srv] LINK failed: {e}')
                         # ensure link cleared
-                        link = None
                         from ..protocol import payload_error
                         conn.sendall(pack_frame(MsgType.ERROR, payload_error(1, f'LINK failed: {e}')))
                 elif mtype == MsgType.UNLINK:
-                    if link is not None and link.get('sock') is not None:
+                    # Close and clear all links (simple UNLINK without payload)
+                    for k, lk in list(links.items()):
                         try:
-                            s: socket.socket = link['sock']  # type: ignore[assignment]
+                            s: socket.socket = lk['sock']
                             s.close()
                         except Exception:
                             pass
-                    link = None
-                    link_box['state'] = None
+                        links.pop(k, None)
+                    link_box['links'] = links
                     if verbose:
-                        print('[srv] UNLINK: cleared')
+                        print('[srv] UNLINK: cleared all links')
                 elif mtype == MsgType.QUIT:
                     if verbose:
                         print('[srv] QUIT received; shutting down connection')
@@ -369,11 +381,11 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                 break
             buf += data
     finally:
-        # Cleanup link peer socket if any (best-effort)
+        # Cleanup any link peer sockets (best-effort)
         try:
-            if 'link' in locals() and link is not None and link.get('sock') is not None:
+            for lk in list(links.values()):
                 try:
-                    s: socket.socket = link['sock']
+                    s: socket.socket = lk['sock']
                     s.close()
                 except Exception:
                     pass
@@ -405,7 +417,7 @@ def main():
     emu = Emulator(prog)
     current_inputs: Dict[str, int] = {name: 0 for name in prog.input_bits.keys()}
     sessions: Dict[int, Dict] = {}
-    link_box: Dict[str, Optional[LinkState]] = {'state': None}
+    link_box: Dict[str, Dict[str, LinkState]] = {'links': {}}
     lock = threading.Lock()
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
