@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple, Any
 from .program import Program, Cell
+from .bitstream import apply_bitstream_to_program
 
 
 class Emulator:
@@ -13,6 +14,22 @@ class Emulator:
             self.cell_out[(c.x, c.y)] = [0, 0, 0, 0]
         # Persistent cycle counter for streaming mode
         self._cycle = 0
+
+    def load_bitstream(self, data: bytes, order: str | None = None, width: int | None = None, height: int | None = None) -> Dict[str, Any]:
+        """
+        Update program LUTs by applying a bitstream (headered or raw). Resets internal state.
+        Returns metadata from apply_bitstream_to_program.
+        """
+        meta = apply_bitstream_to_program(self.p, data, order=order, width=width, height=height)
+        # Ensure state exists for all cells (new cells may have been added)
+        for c in self.p.cells:
+            if (c.x, c.y) not in self.cell_out:
+                self.cell_out[(c.x, c.y)] = [0, 0, 0, 0]
+        # Reset internal outputs and cycle counter
+        for k in list(self.cell_out.keys()):
+            self.cell_out[k] = [0, 0, 0, 0]
+        self._cycle = 0
+        return meta
 
     def _src_value(self, src: Dict[str, Any], inputs: Dict[str, int]) -> int:
         t = src.get('type')
@@ -130,3 +147,14 @@ class Emulator:
                 out_sample[name] = val
             outputs_over_time.append(out_sample)
         return outputs_over_time
+
+    def sample_outputs(self, inputs: Dict[str, int]) -> Dict[str, int]:
+        """Sample current outputs without advancing cycles, using provided input values."""
+        outputs: Dict[str, int] = {}
+        for name, bits in self.p.output_bits.items():
+            val = 0
+            for i, src in enumerate(bits):
+                bitv = self._src_value(src, inputs)
+                val |= (bitv & 1) << i
+            outputs[name] = val
+        return outputs

@@ -17,6 +17,7 @@ Important: Grid width and height must be even (A/B parity preserved across the a
 Compile an expression to a graph and grid program, then run it against a CSV of inputs.
 
 ```bash
+# Be sure to include the full path (do not omit the 'out/' folder).
 python -m bitgrid.cli.compile_expr --expr "out = (a & b) ^ (~c) + 3" --vars "a:16,b:16,c:16" --out out \
 	--graph out/graph.json --program out/program.json
 
@@ -201,6 +202,58 @@ What it shows:
 
 This halves seam bandwidth versus sending both parities every phase, and aligns with the global two-phase barrier described in `docs/tiling-and-interop.md`.
 
+### Tracing data flow and barriers
+
+You can log seam transfers and barrier sync events to a JSONL or CSV trace for debugging.
+
+Two-tile with trace:
+
+```bash
+python -m bitgrid.cli.demo_two_tile_loop --width 8 --height 8 --lanes 8 \
+	--steps "1,3,5,170" --trace out/two_tile_trace.jsonl --trace-format jsonl
+```
+
+2×2 with trace:
+
+```bash
+python -m bitgrid.cli.demo_four_tile_loop --width 8 --height 8 \
+	--steps "1,3,5,0xAA" --trace out/four_tile_trace.jsonl
+```
+
+Trace event kinds:
+- `tx`/`rx`: framed seam transfers (epoch, phase, side, lanes, indices of fresh lanes)
+- `aligned`: recombined value availability at the sink (epoch e-1)
+- Barrier: `barrier_local_done`, `barrier_neighbor_done`, `barrier_neighbor_hdr` (with `value` = ok|epoch_mismatch|phase_mismatch|duplicate), `barrier_advance`, `barrier_cannot_advance` (value = blocked)
+
+Summarize a trace:
+
+```bash
+python -m bitgrid.cli.trace_summary out/four_tile_trace.jsonl
+```
+
+### Fault injection (test error handling)
+
+Inject seam faults in the two-tile demo to validate barrier mismatch handling:
+
+```bash
+# Corrupt CRC at epoch 1, phase B (frame is dropped, neighbor won't mark done)
+python -m bitgrid.cli.demo_two_tile_loop --width 8 --height 8 --lanes 8 \
+	--steps "1,3,5,170" --fault-type crc --fault-epoch 1 --fault-phase B \
+	--trace out/two_tile_fault_crc.jsonl
+
+# Epoch mismatch at epoch 1, phase A (header shows wrong epoch)
+python -m bitgrid.cli.demo_two_tile_loop --width 8 --height 8 --lanes 8 \
+	--steps "1,3,5,170" --fault-type epoch --fault-epoch 1 --fault-phase A \
+	--trace out/two_tile_fault_epoch.jsonl
+
+# Phase mismatch, drop, or duplicate header
+python -m bitgrid.cli.demo_two_tile_loop --fault-type phase --fault-epoch 2 --fault-phase B --steps "1,3,5"
+python -m bitgrid.cli.demo_two_tile_loop --fault-type drop  --fault-epoch 2 --fault-phase A --steps "1,3,5"
+python -m bitgrid.cli.demo_two_tile_loop --fault-type duplicate --fault-epoch 2 --fault-phase A --steps "1,3,5"
+```
+
+Look for `barrier_neighbor_hdr` status (e.g., `epoch_mismatch`) and `barrier_cannot_advance` lines in the trace to confirm detection.
+
 ## Routing pass (neighbor‑only wiring)
 
 Expression‑mapped programs previously allowed long‑range references. A routing pass now inserts ROUTE4 hops to enforce neighbor‑only connections.
@@ -219,8 +272,125 @@ The router uses A* Manhattan paths and inserts ROUTE4 cells per hop. Basic occup
 - bitgrid.cli.run_emulator — emulate with CSV I/O and formatting controls
 - bitgrid.cli.run_f32_mul — run the f32 multiply prototype
 - bitgrid.cli.route_program — insert ROUTE4 hops post‑map (neighbor‑only wiring)
+- bitgrid.cli.bitstream_roundtrip — pack/unpack LUT bitstreams and rehydrate to verify format/round‑trip
+- bitgrid.cli.emu_load_bitstream — load a bitstream into a Program and run the emulator on CSV inputs
+- bitgrid.cli.bitstream_inspect — inspect a bitstream header (dims/order/flags/bits/CRC)
+- bitgrid.cli.serve_tcp — serve the emulator over TCP using the BGCF runtime protocol
+- bitgrid.cli.bgcf_dump — BGCF packet dumper: parse files or run a TCP proxy that logs frames
 - Demos: demo_route4, demo_stream, demo_throughput, demo_edge_io_hello, demo_edge_io_4bit, demo_sum8_correct, demo_stream_sum8
 - Tools: bench_cycles (raw two‑phase loop benchmark)
+
+## Bitstream programming (ASIC/RAM alignment)
+
+You can serialize a Program's per-output 16-bit LUTs into a compact bitstream suitable for ASIC serial configuration chains or a RAM-backed emulator, and rehydrate from that bitstream.
+
+Format:
+- Per cell, outputs are ordered [N, E, S, W] (indices 0..3).
+- For each output, the LUT is 16 bits, packed LSB-first, where bit i corresponds to input index `i = N | (E<<1) | (S<<2) | (W<<3)`.
+- Cells are scanned in row-major order by default (y=0..H-1, x=0..W-1). Optional orders: `col-major`, `snake`.
+- Missing cells are treated as zero-LUTs to keep scan position stable.
+
+Optional fixed header (for cross-language interop):
+
+```
+Offset Size Type  Name             Notes
+0      4    char  magic            'BGBS'
+4      2    u16   version          1
+6      2    u16   header_size      24 bytes
+8      2    u16   width            cells
+10     2    u16   height           cells
+12     1    u8    order            0=row, 1=col, 2=snake
+13     1    u8    flags            bit0=0 means LUT bits LSB-first (current)
+14     4    u32   payload_bits     width*height*4*16
+18     4    u32   payload_crc32    CRC-32 of payload bytes (IEEE)
+22     2    u16   reserved         0
+24     ...  u8[]  payload          packed LUT bits
+```
+
+- Endianness: little-endian for all multi-byte fields.
+- CRC covers only the payload, not the header.
+- Payload length can be derived as `(payload_bits+7)//8`.
+
+Pascal/Delphi reference with a packed record and loader sketch:
+- docs/bitstream_header_pascal.md
+
+CLI round-trip checker:
+
+```bash
+# Raw payload only
+python -m bitgrid.cli.bitstream_roundtrip --program out/program.json --out out/bitstream.bin --order row-major
+
+# With fixed header + CRC (recommended for interop)
+python -m bitgrid.cli.bitstream_roundtrip --program out/program.json --out out/bitstream_hdr.bin --order row-major --header
+```
+
+Emulator direct load (compare against Pascal):
+
+```bash
+python -m bitgrid.cli.emu_load_bitstream --program out/program.json --bitstream out/bitstream_hdr.bin \
+	--inputs inputs.csv --outputs out/results_from_bitstream.csv
+
+# For raw payloads, specify the scan order and (optionally) dims if they differ from Program
+python -m bitgrid.cli.emu_load_bitstream --program out/program.json --bitstream out/bitstream.bin \
+	--order row-major --inputs inputs.csv --outputs out/results_from_raw.csv
+```
+
+Inspect a headered bitstream:
+
+```bash
+python -m bitgrid.cli.bitstream_inspect out/bitstream_hdr.bin
+```
+
+Serve the emulator over TCP (BGCF protocol):
+
+```bash
+python -m bitgrid.cli.serve_tcp --program out/program.json --host 127.0.0.1 --port 9000 --verbose
+```
+
+Quick client examples (talk to the server):
+
+```bash
+# HELLO round-trip
+python -m bitgrid.cli.client_tcp --hello
+
+# Load a bitstream and apply
+python -m bitgrid.cli.client_tcp --load out/bitstream_hdr.bin
+
+# Set inputs, advance, and fetch outputs
+python -m bitgrid.cli.client_tcp --set a=1,b=2 --step 2 --get
+
+# Ask server to close the connection and stop serving this client
+python -m bitgrid.cli.client_tcp --quit
+
+# Ask server to stop its listener (server process exits after current connection)
+python -m bitgrid.cli.client_tcp --shutdown
+
+BGCF packet dump / proxy:
+
+```powershell
+# File mode: parse a captured byte stream (BGCF-framed) and write JSONL summaries
+py -m bitgrid.cli.bgcf_dump --file path\to\capture.bin --out out\capture.jsonl
+
+# Proxy mode: sit between client and server, logging all frames to a JSONL file
+# Client connects to 127.0.0.1:9001; proxy forwards to server at 127.0.0.1:9000
+py -m bitgrid.cli.bgcf_dump --proxy --listen-port 9001 --target-port 9000 --out out\proxy_log.jsonl
+
+# Then point your client at the proxy
+py -m bitgrid.cli.client_tcp --host 127.0.0.1 --port 9001 --hello --quit
+```
+```
+
+Client outline (Pascal/C++): connect to host:port and speak BGCF frames:
+- Send HELLO; expect HELLO reply with dims/features.
+- Send LOAD_CHUNK frames until the bitstream is sent; then APPLY.
+- For each step: SET_INPUTS, STEP (cycles), GET_OUTPUTS and read OUTPUTS.
+
+This writes `out/bitstream.bin` and a `*_rehydrated.json` next to your input Program. The rehydrated Program has the same dimensions and I/O mapping but with LUTs reconstructed from the bitstream.
+
+Library API (if you need programmatic access):
+- `bitgrid.bitstream.pack_program_bitstream(program, order='row-major') -> bytes`
+- `bitgrid.bitstream.unpack_bitstream_to_luts(bitstream, width, height, order='row-major') -> {(x,y): [l0,l1,l2,l3]}`
+- `bitgrid.bitstream.apply_luts_to_program(program, luts_by_cell) -> Program`
 
 ## Repository layout
 
