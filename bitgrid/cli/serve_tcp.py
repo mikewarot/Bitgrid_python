@@ -41,9 +41,10 @@ class LinkState(TypedDict):
     buf_even: List[int]
     buf_odd: List[int]
     cycle: int
+    last_sent: int
 
 
-def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inputs: Dict[str, int], sessions: Dict[int, Dict], link_box: Dict[str, Optional[LinkState]], lock: threading.Lock, preloaded_bitstream: bytes | None = None, verbose: bool = True, shutdown_event: threading.Event | None = None) -> None:
+def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inputs: Dict[str, int], sessions: Dict[int, Dict], link_box: Dict[str, Optional[LinkState]], lock: threading.Lock, preloaded_bitstream: bytes | None = None, verbose: bool = True, shutdown_event: threading.Event | None = None, link_forward: str = 'both') -> None:
     conn.settimeout(1.0)
     # Link state reference (shared)
     link: Optional[LinkState] = link_box.get('state')
@@ -184,29 +185,62 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                         cycles = struct.unpack('<I', payload[:4])[0]
                     else:
                         cycles = 1
-                    # If linked, interleave local and peer steps: deliver one value per subcycle.
+                    # If linked, interleave local and peer steps according to forwarding policy.
                     if link is not None and link.get('sock') is not None:
                         lp_sock: socket.socket = link['sock']
                         lanes: int = link['lanes']
                         local_out_name: str = link['local_out']
                         remote_in_name: str = link['remote_in']
                         cyc: int = link['cycle']
+                        last_sent: int = link.get('last_sent', 0)
+                        # Precompute masks for A/B if needed
+                        maskA = 0
+                        maskB = 0
+                        if link_forward == 'phase':
+                            for i in link.get('idxA', []):
+                                maskA |= (1 << int(i))
+                            for i in link.get('idxB', []):
+                                maskB |= (1 << int(i))
                         for _ in range(int(cycles)):
                             with lock:
                                 emu.run_stream([current_inputs], cycles_per_step=1, reset=False)
                             with lock:
                                 outs = emu.sample_outputs(current_inputs)
                             v = int(outs.get(local_out_name, 0))
-                            # Forward every subcycle (A and B) and advance the peer by one subcycle
+                            send_now = True
+                            send_val = v
+                            if link_forward == 'phase':
+                                # Only update lanes fresh on this subcycle; preserve others from last_sent
+                                if (cyc & 1) == 0:  # A phase
+                                    send_val = (last_sent & ~maskA) | (v & maskA)
+                                else:  # B phase
+                                    send_val = (last_sent & ~maskB) | (v & maskB)
+                                last_sent = send_val
+                            elif link_forward in ('cycle', 'bonly'):
+                                # Only send on B subcycle (reduce frames by ~2x)
+                                if (cyc & 1) == 0:
+                                    send_now = False
+                                else:
+                                    last_sent = v
+                                    send_val = v
+                            else:
+                                # both: always send full value
+                                last_sent = v
+                            if send_now:
+                                try:
+                                    kv = {remote_in_name: send_val}
+                                    lp_sock.sendall(pack_frame(MsgType.SET_INPUTS, encode_name_u64_map(kv)))
+                                except Exception:
+                                    pass
+                            # Always advance the peer by one subcycle to stay in sync
                             try:
-                                kv = {remote_in_name: v}
-                                lp_sock.sendall(pack_frame(MsgType.SET_INPUTS, encode_name_u64_map(kv)))
                                 lp_sock.sendall(pack_frame(MsgType.STEP, b"\x01\x00\x00\x00"))
                             except Exception:
                                 pass
                             cyc += 1
                         # Persist updated state
                         link['cycle'] = cyc
+                        link['last_sent'] = last_sent
                         if verbose:
                             print(f'[srv] step(linked): {cycles}')
                     else:
@@ -272,6 +306,7 @@ def handle_client(conn: socket.socket, prog: Program, emu: Emulator, current_inp
                             'buf_even': [0] * lanes,
                             'buf_odd': [0] * lanes,
                             'cycle': 0,
+                            'last_sent': 0,
                         }
                         # Save back to shared box and ACK
                         link_box['state'] = link
@@ -340,6 +375,7 @@ def main():
     ap.add_argument('--host', default='127.0.0.1', help='Listen address (default 127.0.0.1)')
     ap.add_argument('--port', type=int, default=9000, help='Listen port (default 9000)')
     ap.add_argument('--bitstream', help='Optional bitstream file to preload (headered or raw)')
+    ap.add_argument('--link-forward', choices=['both', 'phase', 'cycle', 'bonly'], default='both', help='Seam forwarding policy: both=subcycle send; phase=send only fresh lanes per phase; cycle/bonly=send on B only')
     ap.add_argument('--verbose', action='store_true', help='Verbose logs')
     args = ap.parse_args()
 
@@ -372,7 +408,7 @@ def main():
                         print('[srv] shutting down listener by request')
                     break
                 continue
-            t = threading.Thread(target=handle_client, args=(conn, prog, emu, current_inputs, sessions, link_box, lock), kwargs={'preloaded_bitstream': bs_data, 'verbose': args.verbose, 'shutdown_event': shutdown_event}, daemon=True)
+            t = threading.Thread(target=handle_client, args=(conn, prog, emu, current_inputs, sessions, link_box, lock), kwargs={'preloaded_bitstream': bs_data, 'verbose': args.verbose, 'shutdown_event': shutdown_event, 'link_forward': args.link_forward}, daemon=True)
             t.start()
             if shutdown_event.is_set():
                 if args.verbose:
