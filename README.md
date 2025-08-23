@@ -144,8 +144,16 @@ The demo prints the recovered text after the pipeline fills.
 - Each LUT cell has 4 inputs and 4 outputs. We map operations per bit, usually using one cell/bit for binary ops and one cell/bit for adders (carry ripple vertically).
 - Signals can be sourced from global inputs, constants, neighbor outputs, or explicit cell references. The mapper favors vertical carry chains for add.
 - Routing:
-	- Expression-mapped programs: previously allowed long-range references. Work is in progress to enforce neighbor-only routing by inserting ROUTE4 hops.
-	- The current demo uses a simple Manhattan (L-shaped) path and inserts ROUTE4 cells per hop. Congestion handling, parity-aware hops, and rip-up/reroute are planned.
+	- Expression-mapped programs: previously allowed long-range references. A routing pass now inserts ROUTE4 hops to enforce neighbor-only wiring for cell-to-cell connections.
+	- Try it:
+
+```
+python -m bitgrid.cli.compile_expr --expr "sum = a + b" --vars "a:8,b:8" --graph out/sum_graph.json --program out/sum_program.json
+python -m bitgrid.cli.route_program --in out/sum_program.json --out out/sum_program_routed.json
+python -m bitgrid.cli.run_emulator --program out/sum_program_routed.json --inputs inputs_mul.csv --outputs out/sum_results.csv --format hex
+```
+
+	- The routing demos use A* Manhattan paths and insert ROUTE4 cells per hop. Congestion handling, parity-aware costs, and rip-up/reroute are planned.
 
 ## Repository layout
 

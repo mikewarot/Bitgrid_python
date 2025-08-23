@@ -122,3 +122,85 @@ class ManhattanRouter:
             last_dir = direction
             cur = nxt
         return cells, last_dir
+
+    def wire_adjacent_to(self, src_cell: Tuple[int,int], dst_cell: Tuple[int,int], src_out: int = 0) -> Tuple[List[Cell], str, Tuple[int,int]]:
+        # Route from src to a neighbor of dst (stop one hop before dst). Returns (cells, dir_to_dst, last_xy).
+        path = self.route(src_cell, dst_cell)
+        if not path:
+            # already at dst; no routing and no adjacency
+            return [], 'E', src_cell
+        # stop before reaching dst
+        hops = path[:-1]
+        cells: List[Cell] = []
+        prev_src = {"type": "cell", "x": src_cell[0], "y": src_cell[1], "out": int(src_out)}
+        cur = src_cell
+        last_dir = 'E'
+        pin_map = {'N':0,'E':1,'S':2,'W':3}
+        for nxt in hops:
+            dx = nxt[0] - cur[0]
+            dy = nxt[1] - cur[1]
+            if dx == 1:
+                direction = 'E'
+            elif dx == -1:
+                direction = 'W'
+            elif dy == 1:
+                direction = 'S'
+            elif dy == -1:
+                direction = 'N'
+            else:
+                raise RuntimeError('Non-adjacent hop encountered')
+            x, y = nxt
+            self.occupy(x, y)
+            inputs = [ {"type":"const","value":0} for _ in range(4) ]
+            opposite = {'E':'W','W':'E','N':'S','S':'N'}[direction]
+            inputs[pin_map[opposite]] = prev_src
+            luts = route_luts(direction, opposite)
+            cell = Cell(x=x, y=y, inputs=inputs, op='ROUTE4', params={'luts': luts})
+            cells.append(cell)
+            prev_src = {"type": "cell", "x": x, "y": y, "out": pin_map[direction]}
+            last_dir = direction
+            cur = nxt
+        # At this point, cur is adjacent to dst, and last_dir points towards dst
+        return cells, last_dir, cur
+
+
+def route_program(prog: Program) -> Program:
+    """
+    Insert ROUTE4 cells for non-adjacent cell->cell inputs to enforce neighbor-only hops.
+    For each cell input referencing another cell at distance > 1, route a path to a neighbor
+    of the sink and reconnect the input to the last ROUTE4 cell's output in the direction
+    facing the sink.
+    """
+    router = ManhattanRouter(prog.width, prog.height)
+    # Occupy existing cells
+    for c in prog.cells:
+        router.occupy(c.x, c.y)
+
+    new_cells: List[Cell] = []
+    dir_to_idx = {'N':0,'E':1,'S':2,'W':3}
+
+    # Rewire inputs
+    for sink in prog.cells:
+        sx, sy = sink.x, sink.y
+        for i, src in enumerate(sink.inputs):
+            if src.get('type') != 'cell':
+                continue
+            if 'x' not in src or 'y' not in src:
+                continue
+            try:
+                tx, ty = int(src['x']), int(src['y'])
+                tout = int(src.get('out', 0))
+            except Exception:
+                continue
+            # if already adjacent, leave as-is
+            if abs(tx - sx) + abs(ty - sy) <= 1:
+                continue
+            # route to a neighbor of sink
+            cells, last_dir, last_xy = router.wire_adjacent_to((tx, ty), (sx, sy), src_out=tout)
+            new_cells.extend(cells)
+            # Connect sink input to the last hop cell's output facing the sink
+            sink.inputs[i] = {"type":"cell","x":last_xy[0],"y":last_xy[1],"out":dir_to_idx[last_dir]}
+
+    # Return updated program with inserted route cells appended
+    return Program(width=prog.width, height=prog.height, cells=prog.cells + new_cells,
+                   input_bits=prog.input_bits, output_bits=prog.output_bits, latency=prog.latency)
