@@ -21,6 +21,40 @@ def build_identity_program(width: int, height: int, lanes: int = 9, row0: int = 
     return Program(width=width, height=height, cells=cells, input_bits=input_bits, output_bits=output_bits, latency=0)
 
 
+def build_identity_program_edges(width: int, height: int, src: str, dst: str, lanes: int = 9) -> Program:
+    """Build a zero-latency identity mapping from input bus 'src' to output bus 'dst'."""
+    if width % 2 or height % 2:
+        raise ValueError('Grid width and height must be even.')
+    if lanes <= 0:
+        raise ValueError('lanes must be > 0')
+    cells: List[Cell] = []
+    input_bits = {src: [ {'type':'input','name':src,'bit':i} for i in range(lanes) ]}
+    output_bits = {dst: [ {'type':'input','name':src,'bit':i} for i in range(lanes) ]}
+    return Program(width=width, height=height, cells=cells, input_bits=input_bits, output_bits=output_bits, latency=0)
+
+
+def build_identity_program_4way(width: int, height: int, lanes: int = 9) -> Program:
+    """Zero-latency identity for all four edges: east<-west, west<-east, south<-north, north<-south."""
+    if width % 2 or height % 2:
+        raise ValueError('Grid width and height must be even.')
+    if lanes <= 0:
+        raise ValueError('lanes must be > 0')
+    cells: List[Cell] = []
+    input_bits = {
+        'west':  [ {'type':'input','name':'west','bit':i}  for i in range(lanes) ],
+        'east':  [ {'type':'input','name':'east','bit':i}  for i in range(lanes) ],
+        'north': [ {'type':'input','name':'north','bit':i} for i in range(lanes) ],
+        'south': [ {'type':'input','name':'south','bit':i} for i in range(lanes) ],
+    }
+    output_bits = {
+        'east':  [ {'type':'input','name':'west','bit':i}  for i in range(lanes) ],
+        'west':  [ {'type':'input','name':'east','bit':i}  for i in range(lanes) ],
+        'south': [ {'type':'input','name':'north','bit':i} for i in range(lanes) ],
+        'north': [ {'type':'input','name':'south','bit':i} for i in range(lanes) ],
+    }
+    return Program(width=width, height=height, cells=cells, input_bits=input_bits, output_bits=output_bits, latency=0)
+
+
 def main():
     import argparse, os
     ap = argparse.ArgumentParser(description='Generate identity pass-through Program with 9-bit west->east rows (includes present flag).')
