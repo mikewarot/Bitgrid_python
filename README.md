@@ -191,3 +191,48 @@ The router uses A* Manhattan paths and inserts ROUTE4 cells per hop. Basic occup
 - No external dependencies; Python 3.9+ recommended.
 - Windows PowerShell: replace `python` with `py` if needed.
 - Keep width and height even across tools.
+
+## Design
+
+### Cell model and LUTs
+
+- Each BitGrid cell has up to 4 inputs and 4 outputs.
+- Evaluation is LUT-first: each output is defined by a 16-bit truth table addressed by the 4 input bits. Bit i of the LUT corresponds to the output value for input index i (0..15).
+- Parameter forms in Program JSON:
+	- `params.luts`: array of four 16-bit integers for outputs [0,1,2,3].
+	- `params.lut`: single 16-bit integer (legacy scalar ops), applied to output 0.
+- Direction indexing used across the repo: N=0, E=1, S=2, W=3.
+- The helper `route_luts(out_dir, in_pin)` creates the 4 per-output LUTs that forward a chosen input pin to a chosen output direction (used by ROUTE4).
+
+### Two-phase timing
+
+- The emulator updates in two phases per cycle: phase A updates cells where (x+y) is even; phase B updates cells where (x+y) is odd.
+- Neighbor communication effectively advances by one cell every two phases (one full cycle). As a result, cps=2 in streaming demos advances a routed signal by one hop per step.
+- For non-trivial logic (e.g., adders), additional internal ripple/carry latency applies. The `latency` field in Program JSON is used by vector runs to determine how many cycles to run before sampling outputs.
+- Even grid dimensions are required so that A/B parity tiles perfectly across the array without drift.
+
+### Mapping and routing
+
+- Mapper places bit-sliced logic and uses vertical ripple-carry for add/sub to align with two-phase timing.
+- Initially, mapped programs could reference distant cells directly. The `route_program` pass rewrites such long edges into neighbor-only wiring by inserting ROUTE4 pass-through cells along Manhattan paths.
+- Router: A* Manhattan search with basic occupancy and optional `--turn` penalty for fewer turns.
+
+### Program JSON sketch
+
+- Top-level: `{ "width": int, "height": int, "latency": int, "cells": [...], "input_bits": {name:[...]}, "output_bits": {name:[...]} }`
+- Cell: `{ "x": int, "y": int, "op": "LUT"|"ROUTE4"|..., "inputs": [src,src,src,src], "params": { "luts": [u16,u16,u16,u16] } }`
+- Source (`src`) can be:
+	- Constant: `{ "type": "const", "value": 0|1 }`
+	- Input bit: `{ "type": "input", "name": "a", "bit": 3 }`
+	- Cell output: `{ "type": "cell", "x": 10, "y": 5, "out": 1 }`
+
+This is a compact overview; see code in `bitgrid/program.py`, `bitgrid/emulator.py`, and `bitgrid/router.py` for exact semantics.
+
+## Troubleshooting
+
+- Grid dimension error: width and height must both be even. Adjust CLI `--width/--height` to even values.
+- "No route found": increase grid size, adjust `--turn`, or reduce occupancy (e.g., change offsets). Use `bitgrid.cli.route_program` to insert ROUTE4 hops after mapping.
+- CSV issues: headers must match variable names; use `0x` for hex; for signed decimal output, pass `--format dec --signed <out_name>`.
+- Streaming shows zeros: ensure `--cps` is high enough for the logic latency. Pure routing needs cps≈2 per hop; adders add internal ripple cycles. Use the correctness demo or increase `--cps`.
+- ROUTE4 forwarding unexpected: check direction indices (N=0,E=1,S=2,W=3) and ensure the intended input pin is wired when generating LUTs via `route_luts`.
+- Performance: use `bitgrid.cli.bench_cycles` for a raw two-phase loop sanity check. Avoid verbose logging when benchmarking.
