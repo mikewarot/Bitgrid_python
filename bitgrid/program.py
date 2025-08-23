@@ -68,3 +68,24 @@ class Program:
     def load(path: str) -> 'Program':
         with open(path, 'r', encoding='utf-8') as f:
             return Program.from_json(f.read())
+
+
+def passthrough_luts(direction: str) -> List[int]:
+    # Build 4 LUTs (16-bit) that route a single input to the specified output direction
+    # direction in {'N','E','S','W'} selects which output gets the chosen input; others 0
+    # Inputs order: N,E,S,W; index = N | (E<<1) | (S<<2) | (W<<3)
+    lutN = lutE = lutS = lutW = 0
+    for idx in range(16):
+        n = (idx >> 0) & 1
+        e = (idx >> 1) & 1
+        s = (idx >> 2) & 1
+        w = (idx >> 3) & 1
+        if direction == 'N':
+            lutN |= (n << idx)
+        elif direction == 'E':
+            lutE |= (e << idx)
+        elif direction == 'S':
+            lutS |= (s << idx)
+        elif direction == 'W':
+            lutW |= (w << idx)
+    return [lutN, lutE, lutS, lutW]

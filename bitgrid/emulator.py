@@ -55,6 +55,20 @@ class Emulator:
                     s = (a ^ b) ^ cin
                     cout = (a & b) | (a & cin) | (b & cin)
                     outs = [s & 1, cout & 1, 0, 0]
+                elif c.op == 'ROUTE4':
+                    # 4-input (N,E,S,W) -> 4 outputs (N,E,S,W) via 4 LUTs (16-bit each)
+                    # Inputs mapping: inputs[0]=N, [1]=E, [2]=S, [3]=W
+                    n = a
+                    e = b
+                    sbit = src_value(c.inputs[2])
+                    w = src_value(c.inputs[3])
+                    idx = (n & 1) | ((e & 1) << 1) | ((sbit & 1) << 2) | ((w & 1) << 3)
+                    luts = c.params.get('luts', [0, 0, 0, 0])
+                    on = (int(luts[0]) >> idx) & 1
+                    oe = (int(luts[1]) >> idx) & 1
+                    os = (int(luts[2]) >> idx) & 1
+                    ow = (int(luts[3]) >> idx) & 1
+                    outs = [on, oe, os, ow]
                 else:
                     outs = [0, 0, 0, 0]
                 self.cell_out[(c.x, c.y)] = outs
