@@ -154,6 +154,23 @@ python -m bitgrid.cli.demo_sum8_correct --width 64 --height 64 --pairs "(1,2),(3
 python -m bitgrid.cli.demo_stream_sum8 --width 64 --height 32 --cps 2 --pairs "(1,2),(3,4),(10,20),(255,1)"
 ```
 
+#### Streaming sums at cps=2 (latency‑aware)
+
+The streaming demo now derives the adder’s per‑bit step latency from two‑phase parity and holds each input pair steady for K+1 steps, sampling the sum at the end of each window. This yields correct results at cps=2 without changing the mapped adder.
+
+- K is the maximum per‑bit step lag across the 8 rows; with vertical ripple and two‑phase timing, K is small (typically 4 for 8 bits depending on placement parity).
+- The demo prints one sum per input pair. Example output:
+
+```
+i=0: a=1 b=2 -> sum=0x03
+i=1: a=3 b=4 -> sum=0x07
+i=2: a=10 b=20 -> sum=0x1E
+i=3: a=255 b=1 -> sum=0x00
+```
+
+Notes:
+- For fully pipelined 1‑per‑step streaming, either increase cps to cover the ripple depth or implement pipeline registers in the adder and/or add explicit ROUTE4 delays to align bit arrivals.
+
 ## Routing pass (neighbor‑only wiring)
 
 Expression‑mapped programs previously allowed long‑range references. A routing pass now inserts ROUTE4 hops to enforce neighbor‑only connections.
