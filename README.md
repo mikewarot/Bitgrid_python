@@ -1,39 +1,40 @@
 # BitGrid Python Prototype
 
-This repository provides a prototype toolchain to:
+A small Python toolchain to:
 
-1. Parse a math/bitwise expression into a directed graph of operations.
-2. Map that graph into a 2D "BitGrid" of 4-input 4-output LUT cells.
-3. Emulate the BitGrid with 2-phase updates (A: x+y even, B: x+y odd).
-4. Provide CLI tools to compile expressions and run emulations with I/O files and optional debug logs.
+- Parse a math/bitwise expression into a directed graph.
+- Map that graph into a 2D BitGrid of 4-input/4-output LUT cells.
+- Emulate the grid with two-phase updates (A: x+y even, B: x+y odd).
+- Route long wires by inserting neighbor-only ROUTE4 hops.
+- Drive simple streaming I/O demos from the grid edges.
 
-Status: prototype focused on bitwise ops (&, |, ^, ~), shifts (<<, >>), addition (+), subtraction (two's complement), and multiplication (*) via shift-and-add. Signed math is supported by prefixing widths with 's' (e.g., a:s8).
+Status: prototype focused on bitwise ops (&, |, ^, ~), shifts (<<, >>), add/sub, and multiply via shift-and-add. Signed math is supported by prefixing widths with 's' (e.g., a:s8).
+
+Important: Grid width and height must be even (A/B parity preserved across the array). The emulator evaluates each cell via 16‑bit truth tables (LUT-first), allowing any function of up to 4 inputs per output.
 
 ## Quick start
 
-- Compile an expression to a graph and grid program:
+Compile an expression to a graph and grid program, then run it against a CSV of inputs.
 
-```
-python -m bitgrid.cli.compile_expr --expr "out = (a & b) ^ (~c) + 3" --vars "a:16,b:16,c:16" --out out --graph out/graph.json --program out/program.json
+```bash
+python -m bitgrid.cli.compile_expr --expr "out = (a & b) ^ (~c) + 3" --vars "a:16,b:16,c:16" --out out \
+	--graph out/graph.json --program out/program.json
+
+python -m bitgrid.cli.run_emulator --program out/program.json --inputs inputs.csv \
+	--outputs out/results.csv --log out/debug.log
 ```
 
-- Prepare a CSV with inputs (header must match variables):
+Input CSV header must match variables, e.g.:
 
-```
+```csv
 a,b,c
 0x00FF,0x0F0F,0xAAAA
 0x1234,0x5678,0x9ABC
 ```
 
-- Run the emulator and write outputs:
+Output formatting options:
 
-```
-python -m bitgrid.cli.run_emulator --program out/program.json --inputs inputs.csv --outputs out/results.csv --log out/debug.log
-```
-
-- Output formatting:
-
-```
+```bash
 # Hex (default)
 python -m bitgrid.cli.run_emulator --program out/smul_program.json --inputs inputs_mul.csv --outputs out/smul_hex.csv
 
@@ -44,134 +45,149 @@ python -m bitgrid.cli.run_emulator --program out/smul_program.json --inputs inpu
 python -m bitgrid.cli.run_emulator --program out/smul_program.json --inputs inputs_mul.csv --outputs out/smul_bin.csv --format bin
 ```
 
-### Multiply example (unsigned)
+## Examples
 
-- Prepare a CSV of multiplicand/multiplier pairs (an example `inputs_mul.csv` is included):
+### Multiply (unsigned)
 
-```
+Prepare a CSV of multiplicand/multiplier pairs (an example `inputs_mul.csv` is included):
+
+```csv
 a,b
 6,7
 12,13
 0x0F,0x10
 ```
 
-- Compile a multiply program and run it:
+Compile and run:
 
-```
+```bash
 python -m bitgrid.cli.compile_expr --expr "prod = a * b" --vars "a:8,b:8" --graph out/mul_graph.json --program out/mul_program.json
 python -m bitgrid.cli.run_emulator --program out/mul_program.json --inputs inputs_mul.csv --outputs out/mul_results.csv
 ```
 
-### Signed math examples
+### Signed math
+
+- Signed multiply (two's complement):
+
+```bash
+python -m bitgrid.cli.compile_expr --expr "prod = a * b" --vars "a:s8,b:s8" --graph out/smul_graph.json --program out/smul_program.json
+```
+
+- Arithmetic right shift when the left operand is signed:
+
+```bash
+python -m bitgrid.cli.compile_expr --expr "q = a >> 1" --vars "a:s8" --graph out/sar_graph.json --program out/sar_program.json
+```
+
 ### f32 (IEEE‑754) multiply (prototype)
 
-- Build and run f32 multiply (inputs/outputs as 32-bit integers in hex or decimal):
+Inputs/outputs are 32‑bit integers (hex or decimal).
 
-```
+```bash
 python -m bitgrid.cli.run_f32_mul --inputs inputs_f32_mul.csv --outputs out/f32_mul_results.csv
 ```
 
-- Example `inputs_f32_mul.csv`:
+Example `inputs_f32_mul.csv`:
 
-```
+```csv
 a,b
 0x3F800000,0x40000000  # 1.0 * 2.0 = 2.0
 0x40400000,0x40400000  # 3.0 * 3.0 = 9.0
 ```
 
-Notes: prototype handles normal numbers and zero, uses truncation rounding, and omits NaN/Inf/subnormals for now.
-
-
-- Signed multiply (two's complement):
-
-```
-python -m bitgrid.cli.compile_expr --expr "prod = a * b" --vars "a:s8,b:s8" --graph out/smul_graph.json --program out/smul_program.json
-```
-
-- Signed right shift uses arithmetic shift when the left operand is signed:
-
-```
-python -m bitgrid.cli.compile_expr --expr "q = a >> 1" --vars "a:s8" --graph out/sar_graph.json --program out/sar_program.json
-```
-
-```
+Notes: prototype handles normal numbers and zero, truncates rounding, and omits NaN/Inf/subnormals for now.
 
 ## Concepts
 
-- Graph JSON: a high-level DAG of multi-bit operations.
-- Program JSON: BitGrid configuration with cells (LUTs), wiring, and I/O mapping. Includes an estimated latency (cycles) for values to propagate.
-- Emulator: performs two-phase updates per cycle; run for `latency` cycles per input vector before sampling outputs.
- - Timing note: BitGrid dimensions are always even (width and height) to preserve A/B parity across the array.
+- Graph JSON: high‑level DAG of multi‑bit operations.
+- Program JSON: BitGrid cells (LUTs), wiring, and I/O mapping. Includes an estimated propagation latency in cycles.
+- Emulator: two‑phase updates per cycle; run for `latency` cycles per input vector before sampling outputs.
+- LUT‑first evaluation: each cell can provide up to 4 outputs from per‑output 16‑bit truth tables. Legacy op codes are still understood.
+- Even dimensions required: width and height must be even to preserve two‑phase parity across the array.
+
+## Routing and streaming
 
 ### Directional routing (ROUTE4) demo
 
-- Each BitGrid cell can also act as a 4-input/4-output directional router using 4 small LUTs (one per direction: N/E/S/W). This enables simultaneous multi-direction pass-through while still allowing logic on other outputs.
+Each cell can act as a 4‑input/4‑output directional router using four small LUTs (one per direction: N/E/S/W). This enables multi‑direction pass‑through while still allowing logic on other outputs.
 
-- Try a minimal routing demo that wires a constant '1' from a source cell to a destination cell using neighbor-only hops:
-
-```
+```bash
 python -m bitgrid.cli.demo_route4 --width 16 --height 8 --src 0,0 --dst 5,3
 ```
 
-It prints whether the bit arrives at the destination output (expected: 1). This uses a simple Manhattan router that inserts ROUTE4 pass-through cells along the path.
+Prints whether the bit arrives at the destination output (expected: 1). Uses a simple A* Manhattan router that inserts ROUTE4 pass‑through cells along the path.
 
 ### Streaming throughput demo
 
-Measure streaming behavior over a routed path. Use cycles-per-step (cps) to control how many emulator cycles advance per input step. With the current 2-phase model, cps=2 advances one hop per step.
+Measure streaming behavior over a routed path. Cycles‑per‑step (cps) controls how many emulator cycles advance per input step. With the current two‑phase model, cps=2 advances one hop per step.
 
-```
+```bash
 python -m bitgrid.cli.demo_throughput --width 16 --height 8 --src 0,1 --dst 10,6 --train 6 --cps 2
+python -m bitgrid.cli.demo_throughput --turn 0.25  # prefer straighter paths
 ```
 
-You should see a burst of 1s appear at the destination after a fill latency, then drain to 0s. You can bias the router to prefer straighter paths via a small turn penalty:
+### Edge streaming I/O
 
-```
-python -m bitgrid.cli.demo_throughput --turn 0.25
-```
+Hello World over 8 parallel lanes (west→east):
 
-### Edge streaming I/O (Hello World)
-
-Send ASCII text as 8 parallel bits from the west edge across 8 lanes and read it back on the east edge.
-
-```
+```bash
 python -m bitgrid.cli.demo_edge_io_hello --width 16 --height 8 --row 0 --len 10 --cps 2 --text "Hello World"
 ```
 
-The demo prints the recovered text after the pipeline fills.
+4‑bit lane demo (per‑step I/O shown):
 
-## Limits and notes
-
-- Each LUT cell has 4 inputs and 4 outputs. We map operations per bit, usually using one cell/bit for binary ops and one cell/bit for adders (carry ripple vertically).
-- Signals can be sourced from global inputs, constants, neighbor outputs, or explicit cell references. The mapper favors vertical carry chains for add.
-- Routing:
-	- Expression-mapped programs: previously allowed long-range references. A routing pass now inserts ROUTE4 hops to enforce neighbor-only wiring for cell-to-cell connections.
-	- Try it:
-
+```bash
+python -m bitgrid.cli.demo_edge_io_4bit --width 16 --height 8 --row 0 --cps 2
 ```
+
+### 8+8 → sum demos
+
+- Correctness‑first (map → route → run per vector):
+
+```bash
+python -m bitgrid.cli.demo_sum8_correct --width 64 --height 64 --pairs "(1,2),(3,4),(10,20),(255,1)"
+```
+
+- Streaming prototype (ongoing):
+
+```bash
+python -m bitgrid.cli.demo_stream_sum8 --width 64 --height 32 --cps 2 --pairs "(1,2),(3,4),(10,20),(255,1)"
+```
+
+## Routing pass (neighbor‑only wiring)
+
+Expression‑mapped programs previously allowed long‑range references. A routing pass now inserts ROUTE4 hops to enforce neighbor‑only connections.
+
+```bash
 python -m bitgrid.cli.compile_expr --expr "sum = a + b" --vars "a:8,b:8" --graph out/sum_graph.json --program out/sum_program.json
 python -m bitgrid.cli.route_program --in out/sum_program.json --out out/sum_program_routed.json
 python -m bitgrid.cli.run_emulator --program out/sum_program_routed.json --inputs inputs_mul.csv --outputs out/sum_results.csv --format hex
 ```
 
-	- The routing demos use A* Manhattan paths and insert ROUTE4 cells per hop. Congestion handling, parity-aware costs, and rip-up/reroute are planned.
+The router uses A* Manhattan paths and inserts ROUTE4 cells per hop. Basic occupancy is considered; congestion/rip‑up and parity‑aware costs are planned.
+
+## CLI catalog
+
+- bitgrid.cli.compile_expr — compile expression to graph/program JSON
+- bitgrid.cli.run_emulator — emulate with CSV I/O and formatting controls
+- bitgrid.cli.run_f32_mul — run the f32 multiply prototype
+- bitgrid.cli.route_program — insert ROUTE4 hops post‑map (neighbor‑only wiring)
+- Demos: demo_route4, demo_stream, demo_throughput, demo_edge_io_hello, demo_edge_io_4bit, demo_sum8_correct, demo_stream_sum8
+- Tools: bench_cycles (raw two‑phase loop benchmark)
 
 ## Repository layout
 
-- `bitgrid/graph.py` — DAG structures and JSON serialization.
-- `bitgrid/expr_to_graph.py` — parses expression to graph.
-- `bitgrid/mapper.py` — maps graph to BitGrid program JSON.
-- `bitgrid/emulator.py` — two-phase grid emulator.
-- `bitgrid/router.py` — simple Manhattan router that inserts ROUTE4 pass-through cells.
-- `bitgrid/cli/compile_expr.py` — CLI to compile expression to graph/program.
-- `bitgrid/cli/run_emulator.py` — CLI to emulate with CSV I/O.
-- `bitgrid/cli/demo_route4.py` — CLI to demo directional routing with ROUTE4.
-
-## Branches
-
-- main — active BitGrid toolchain (expression → graph → grid → emulator).
-- master — legacy code (older GUI-based simulator). Kept for history.
+- `bitgrid/graph.py` — DAG structures and JSON serialization
+- `bitgrid/expr_to_graph.py` — parse expression to graph
+- `bitgrid/mapper.py` — map graph to BitGrid program JSON
+- `bitgrid/program.py` — program/cell dataclasses and JSON I/O
+- `bitgrid/emulator.py` — two‑phase grid emulator, LUT‑first evaluation
+- `bitgrid/router.py` — Manhattan router and ROUTE4 helpers
+- `bitgrid/float/` — f32 multiply prototype utilities
+- `bitgrid/cli/` — CLI tools and demos listed above
 
 ## Development
 
 - No external dependencies; Python 3.9+ recommended.
-- Run unit smoke via the commands above.
+- Windows PowerShell: replace `python` with `py` if needed.
+- Keep width and height even across tools.
