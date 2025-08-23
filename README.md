@@ -12,6 +12,8 @@ Status: prototype focused on bitwise ops (&, |, ^, ~), shifts (<<, >>), add/sub,
 
 Important: Grid width and height must be even (A/B parity preserved across the array). The emulator evaluates each cell via 16‑bit truth tables (LUT-first), allowing any function of up to 4 inputs per output.
 
+This is *almost entirely written by ChatGPT 5*, not me
+
 ## Quick start
 
 Compile an expression to a graph and grid program, then run it against a CSV of inputs.
