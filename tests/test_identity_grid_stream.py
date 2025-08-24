@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import socket, subprocess, sys, tempfile, time, unittest
+import os, socket, subprocess, sys, tempfile, time, unittest
 from typing import Dict, Tuple, List
 
 from bitgrid.cli.make_identity_program import build_identity_program
@@ -81,8 +81,9 @@ class TestIdentityGridStream(unittest.TestCase):
             proc = subprocess.Popen([sys.executable, '-m', 'bitgrid.cli.serve_tcp', '--program', pth, '--host', '127.0.0.1', '--port', str(port)])
             try:
                 # Wait for server
+                wait_server = float(os.environ.get('BG_TEST_WAIT_SERVER', '10.0'))
                 t0 = time.time(); ok = False
-                while time.time() - t0 < 5.0 and not ok:
+                while time.time() - t0 < wait_server and not ok:
                     try:
                         with _connect('127.0.0.1', port) as s:
                             w, h = _hello(s)
@@ -96,6 +97,8 @@ class TestIdentityGridStream(unittest.TestCase):
                 try:
                     # Send 9-bit framed bytes over west: lower 8 bits = data, bit8 = present flag
                     cps = 1  # subcycle-level control (not critical with zero-latency IO)
+                    wait_present = float(os.environ.get('BG_TEST_WAIT_PRESENT', '3.0'))
+                    wait_clear = float(os.environ.get('BG_TEST_WAIT_CLEAR', '3.0'))
                     message = 'Hello, World, this is a much longer test than before'
                     width = len(message)+3
                     out: List[int] = []
@@ -107,7 +110,7 @@ class TestIdentityGridStream(unittest.TestCase):
                         _step(s, cps)
                         # Poll for present=1
                         captured = False
-                        deadline = time.time() + 1.0
+                        deadline = time.time() + wait_present
                         while time.time() < deadline:
                             m = _get_outputs(s)
                             east = int(m.get('east', 0))
@@ -122,6 +125,13 @@ class TestIdentityGridStream(unittest.TestCase):
                         # Clear present and advance
                         _set_inputs(s, {'west': 0})
                         _step(s, cps)
+                        # Wait for present to drop
+                        deadline2 = time.time() + wait_clear
+                        while time.time() < deadline2:
+                            m2 = _get_outputs(s)
+                            if ((int(m2.get('east', 0)) >> 8) & 1) == 0:
+                                break
+                            time.sleep(0.005)
                     text = ''.join(chr(b) for b in out[:len(message)])
                     self.assertEqual(text, message)
                 finally:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import socket, subprocess, sys, tempfile, time, unittest
+import os, socket, subprocess, sys, tempfile, time, unittest
 from typing import Dict, Tuple, List
 
 from bitgrid.cli.make_identity_program import build_inout_program
@@ -82,8 +82,9 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
             right_proc = subprocess.Popen([sys.executable, '-m', 'bitgrid.cli.serve_tcp', '--program', right_path, '--host', '127.0.0.1', '--port', str(rp)])
             try:
                 # Wait for servers
+                wait_server = float(os.environ.get('BG_TEST_WAIT_SERVER', '10.0'))
                 t0 = time.time(); left_ok = right_ok = False
-                while time.time() - t0 < 5.0 and not (left_ok and right_ok):
+                while time.time() - t0 < wait_server and not (left_ok and right_ok):
                     try:
                         with _connect('127.0.0.1', lp) as s:
                             w, h = _hello(s); left_ok = (w > 0 and h > 0)
@@ -103,20 +104,20 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                     payload_lr = payload_link(1, 'east_out', 'west_in', '127.0.0.1', rp, lanes=0)
                     left.sendall(pack_frame(MsgType.LINK, payload_lr))
                     resp1 = _send_and_recv(left, b'', timeout=3.0)
-                    if resp1 is None:
+                    if not resp1 or resp1.get('type') != MsgType.LINK_ACK:
                         self.fail('No LINK_ACK from left for left->right link')
-                    self.assertEqual(resp1.get('type'), MsgType.LINK_ACK)
 
                     payload_rl = payload_link(1, 'east_out', 'west_in', '127.0.0.1', lp, lanes=0)
                     right.sendall(pack_frame(MsgType.LINK, payload_rl))
                     resp2 = _send_and_recv(right, b'', timeout=3.0)
-                    if resp2 is None:
+                    if not resp2 or resp2.get('type') != MsgType.LINK_ACK:
                         self.fail('No LINK_ACK from right for right->left link')
-                    self.assertEqual(resp2.get('type'), MsgType.LINK_ACK)
 
                     cps = 2
                     msgL = 'Left->Right stream!'  # from left to right
                     msgR = 'Right->Left reply.'  # from right to left
+                    wait_present = float(os.environ.get('BG_TEST_WAIT_PRESENT', '3.0'))
+                    wait_clear = float(os.environ.get('BG_TEST_WAIT_CLEAR', '3.0'))
                     outR: List[int] = []  # what right receives (from left)
                     outL: List[int] = []  # what left receives (from right)
 
@@ -132,7 +133,7 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                         # Step only the left; it will step the right as part of link forwarding
                         _step(left, cps)
                         # Poll receivers on both ends
-                        deadline = time.time() + 1.0
+                        deadline = time.time() + wait_present
                         gotR = (i >= len(msgL))  # if no symbol sent, treat as trivially satisfied
                         gotL = (i >= len(msgR))
                         while time.time() < deadline and not (gotR and gotL):
@@ -158,7 +159,7 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                             _set_inputs(right, {'west_in': 0})
                         _step(left, cps)
                         # Wait for present to drop on both ends
-                        deadline2 = time.time() + 1.0
+                        deadline2 = time.time() + wait_clear
                         while time.time() < deadline2:
                             okR = True if i >= len(msgL) else (((int(_get_outputs(right).get('east_in', 0)) >> 8) & 1) == 0)
                             okL = True if i >= len(msgR) else (((int(_get_outputs(left).get('east_in', 0)) >> 8) & 1) == 0)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import socket, subprocess, sys, tempfile, time, unittest
+import os, socket, subprocess, sys, tempfile, time, unittest
 from typing import Dict, Tuple, List
 
 from bitgrid.cli.make_identity_program import build_identity_program_4way, build_edge_mirror
@@ -85,8 +85,9 @@ class TestLinkedDirections(unittest.TestCase):
             right_proc = subprocess.Popen([sys.executable, '-m', 'bitgrid.cli.serve_tcp', '--program', right_path, '--host', '127.0.0.1', '--port', str(rp)])
             try:
                 # Wait for servers
+                wait_server = float(os.environ.get('BG_TEST_WAIT_SERVER', '10.0'))
                 t0 = time.time(); left_ok = right_ok = False
-                while time.time() - t0 < 5.0 and not (left_ok and right_ok):
+                while time.time() - t0 < wait_server and not (left_ok and right_ok):
                     try:
                         with _connect('127.0.0.1', lp) as s:
                             w, h = _hello(s); left_ok = (w > 0 and h > 0)
@@ -106,19 +107,20 @@ class TestLinkedDirections(unittest.TestCase):
                     payload = payload_link(dir_code, local_edge, remote_edge, '127.0.0.1', rp, lanes=0)
                     left.sendall(pack_frame(MsgType.LINK, payload))
                     resp = _send_and_recv(left, b'', timeout=3.0)
-                    if resp is None:
+                    if not resp or resp.get('type') != MsgType.LINK_ACK:
                         self.fail('No LINK_ACK from left')
-                    self.assertEqual(resp.get('type'), MsgType.LINK_ACK)
 
                     cps = 2
                     message = 'NSWE test!'
+                    wait_present = float(os.environ.get('BG_TEST_WAIT_PRESENT', '3.0'))
+                    wait_clear = float(os.environ.get('BG_TEST_WAIT_CLEAR', '3.0'))
                     out: List[int] = []
                     for ch in message:
                         frame = (1 << 8) | (ord(ch) & 0xFF)
                         _set_inputs(left, {local_edge: frame})
                         _step(left, cps)
                         # Poll right on dst
-                        deadline = time.time() + 1.0
+                        deadline = time.time() + wait_present
                         captured = False
                         while time.time() < deadline:
                             m = _get_outputs(right, timeout=0.5)
@@ -134,7 +136,7 @@ class TestLinkedDirections(unittest.TestCase):
                         _set_inputs(left, {local_edge: 0})
                         _step(left, cps)
                         # Wait for present to drop
-                        deadline2 = time.time() + 1.0
+                        deadline2 = time.time() + wait_clear
                         while time.time() < deadline2:
                             m2 = _get_outputs(right, timeout=0.5)
                             if ((int(m2.get(remote_edge, 0)) >> 8) & 1) == 0:

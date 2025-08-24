@@ -80,7 +80,19 @@ def build_inout_program(width: int, height: int, lanes: int = 9) -> Program:
     cells: List[Cell] = []
     names = ['west_in','east_in','north_in','south_in','west_out','east_out','north_out','south_out']
     input_bits = { name: [ {'type':'input','name':name,'bit':i} for i in range(lanes) ] for name in names }
+    # Default same-name mirror, then override with cross-edge wiring
     output_bits = { name: [ {'type':'input','name':name,'bit':i} for i in range(lanes) ] for name in names }
+    # Outward paths (send across to the opposite seam):
+    # Drive each *_out from the opposite side's *_in, so e.g. west_in -> east_out
+    output_bits['east_out'] = [ {'type':'input','name':'west_in','bit':i} for i in range(lanes) ]
+    output_bits['west_out'] = [ {'type':'input','name':'east_in','bit':i} for i in range(lanes) ]
+    output_bits['south_out'] = [ {'type':'input','name':'north_in','bit':i} for i in range(lanes) ]
+    output_bits['north_out'] = [ {'type':'input','name':'south_in','bit':i} for i in range(lanes) ]
+    # Inward observation paths: west_in -> east_in, east_in -> west_in, north_in -> south_in, south_in -> north_in
+    output_bits['east_in'] = [ {'type':'input','name':'west_in','bit':i} for i in range(lanes) ]
+    output_bits['west_in'] = [ {'type':'input','name':'east_in','bit':i} for i in range(lanes) ]
+    output_bits['south_in'] = [ {'type':'input','name':'north_in','bit':i} for i in range(lanes) ]
+    output_bits['north_in'] = [ {'type':'input','name':'south_in','bit':i} for i in range(lanes) ]
     return Program(width=width, height=height, cells=cells, input_bits=input_bits, output_bits=output_bits, latency=0)
 
 
