@@ -101,13 +101,15 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                 right = _connect('127.0.0.1', rp)
                 try:
                     # Establish links in both directions
+                    # Left -> Right: left.east_out -> right.west_in (drive left 'west_in', observe on right 'east_in')
                     payload_lr = payload_link(1, 'east_out', 'west_in', '127.0.0.1', rp, lanes=0)
                     left.sendall(pack_frame(MsgType.LINK, payload_lr))
                     resp1 = _send_and_recv(left, b'', timeout=3.0)
                     if not resp1 or resp1.get('type') != MsgType.LINK_ACK:
                         self.fail('No LINK_ACK from left for left->right link')
 
-                    payload_rl = payload_link(1, 'east_out', 'west_in', '127.0.0.1', lp, lanes=0)
+                    # Right -> Left: right.west_out -> left.east_in (drive right 'east_in', observe on left 'west_in')
+                    payload_rl = payload_link(3, 'west_out', 'east_in', '127.0.0.1', lp, lanes=0)
                     right.sendall(pack_frame(MsgType.LINK, payload_rl))
                     resp2 = _send_and_recv(right, b'', timeout=3.0)
                     if not resp2 or resp2.get('type') != MsgType.LINK_ACK:
@@ -129,7 +131,7 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                             _set_inputs(left, {'west_in': frameL})
                         if i < len(msgR):
                             frameR = (1 << 8) | (ord(msgR[i]) & 0xFF)
-                            _set_inputs(right, {'west_in': frameR})
+                            _set_inputs(right, {'east_in': frameR})
                         # Step only the left; it will step the right as part of link forwarding
                         _step(left, cps)
                         # Poll receivers on both ends
@@ -145,9 +147,9 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                                     gotR = True
                             if not gotL:
                                 mL = _get_outputs(left, timeout=0.5)
-                                eastL = int(mL.get('east_in', 0))
-                                if ((eastL >> 8) & 1) == 1:
-                                    outL.append(eastL & 0xFF)
+                                westL = int(mL.get('west_in', 0))
+                                if ((westL >> 8) & 1) == 1:
+                                    outL.append(westL & 0xFF)
                                     gotL = True
                             if not (gotR and gotL):
                                 time.sleep(0.005)
@@ -156,13 +158,13 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                         if i < len(msgL):
                             _set_inputs(left, {'west_in': 0})
                         if i < len(msgR):
-                            _set_inputs(right, {'west_in': 0})
+                            _set_inputs(right, {'east_in': 0})
                         _step(left, cps)
                         # Wait for present to drop on both ends
                         deadline2 = time.time() + wait_clear
                         while time.time() < deadline2:
                             okR = True if i >= len(msgL) else (((int(_get_outputs(right).get('east_in', 0)) >> 8) & 1) == 0)
-                            okL = True if i >= len(msgR) else (((int(_get_outputs(left).get('east_in', 0)) >> 8) & 1) == 0)
+                            okL = True if i >= len(msgR) else (((int(_get_outputs(left).get('west_in', 0)) >> 8) & 1) == 0)
                             if okR and okL:
                                 break
                             time.sleep(0.005)

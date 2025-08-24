@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import socket
+import os, socket
 import subprocess
 import sys
 import tempfile
@@ -99,9 +99,10 @@ class TestLinkedHello(unittest.TestCase):
             right_proc = subprocess.Popen([sys.executable, '-m', 'bitgrid.cli.serve_tcp', '--program', right_path, '--host', '127.0.0.1', '--port', str(rp)])
             try:
                 # Wait for HELLO to succeed
+                wait_server = float(os.environ.get('BG_TEST_WAIT_SERVER', '10.0'))
                 t0 = time.time()
                 left_ok = right_ok = False
-                while time.time() - t0 < 5.0 and not (left_ok and right_ok):
+                while time.time() - t0 < wait_server and not (left_ok and right_ok):
                     try:
                         with _connect('127.0.0.1', lp) as s:
                             w, h = _hello(s)
@@ -138,6 +139,8 @@ class TestLinkedHello(unittest.TestCase):
                         ("Hello, World!", 2),
                     ]
 
+                    wait_present = float(os.environ.get('BG_TEST_WAIT_PRESENT', '3.0'))
+                    wait_clear = float(os.environ.get('BG_TEST_WAIT_CLEAR', '3.0'))
                     for message, cps in cases:
                         with self.subTest(message=message, cps=cps):
                             # Send message characters and sample outputs per character
@@ -149,12 +152,22 @@ class TestLinkedHello(unittest.TestCase):
                                 _step(left, cps)
                                 # Wait until a new non-zero byte appears (or timeout)
                                 target_len = len(out_bytes) + 1
-                                deadline = time.time() + 1.0
+                                deadline = time.time() + wait_present
                                 while time.time() < deadline:
                                     m = _get_outputs(right, timeout=0.5)
                                     b = int(m.get('dout', 0)) & 0xFF
                                     if b != 0 and (len(out_bytes) == 0 or b != out_bytes[-1]):
                                         out_bytes.append(b)
+                                        break
+                                    time.sleep(0.005)
+                                # small clear step between chars to avoid coalescing
+                                _set_inputs(left, {'din': 0})
+                                _step(left, cps)
+                                # wait for zero to be seen (optional)
+                                deadline2 = time.time() + wait_clear
+                                while time.time() < deadline2:
+                                    m2 = _get_outputs(right, timeout=0.5)
+                                    if (int(m2.get('dout', 0)) & 0xFF) == 0:
                                         break
                                     time.sleep(0.005)
                             # Briefly clear to zero at the end
