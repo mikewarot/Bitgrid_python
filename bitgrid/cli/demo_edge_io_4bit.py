@@ -25,7 +25,7 @@ def build_4bit_edge_program(width: int, height: int, row0: int, length: int) -> 
             {"type":"const","value":0},  # N
             {"type":"const","value":0},  # E
             {"type":"const","value":0},  # S
-            {"type":"input","name":"din4","bit":i},  # W gets din bit i
+            {"type":"input","name":"west4","bit":i},  # W gets west4 bit i
         ]
         inj = Cell(x=0, y=y, inputs=inj_inputs, op='ROUTE4', params={'luts': route_luts('E','W')})
         cells.append(inj)
@@ -38,11 +38,11 @@ def build_4bit_edge_program(width: int, height: int, row0: int, length: int) -> 
             prev_src = {"type":"cell","x":x,"y":y,"out":dir_to_idx['E']}
 
     output_bits: Dict[str, List[Dict]] = {
-        'dout4': [ {"type":"cell","x":length,"y":row0 + i,"out":dir_to_idx['E']} for i in range(4) ]
+        'east4': [ {"type":"cell","x":length,"y":row0 + i,"out":dir_to_idx['E']} for i in range(4) ]
     }
 
     prog = Program(width=width, height=height, cells=cells,
-                   input_bits={'din4': [{'type':'input','name':'din4','bit':i} for i in range(4)]},
+                   input_bits={'west4': [{'type':'input','name':'west4','bit':i} for i in range(4)]},
                    output_bits=output_bits, latency=width + height)
     return prog
 
@@ -78,15 +78,15 @@ def main():
     emu = Emulator(prog)
 
     in_vals = parse_steps_hex_list(args.steps)
-    steps = [ {'din4': v} for v in in_vals ]
+    steps = [ {'west4': v} for v in in_vals ]
     # Drain zeros to flush pipeline
-    steps += [ {'din4': 0} for _ in range(args.len + 4) ]
+    steps += [ {'west4': 0} for _ in range(args.len + 4) ]
 
     samples = emu.run_stream(steps, cycles_per_step=cps, reset=True)
 
     # Print per-step IO
     for t, (inv, s) in enumerate(zip(in_vals + [None]*(len(samples)-len(in_vals)), samples)):
-        dout = int(s.get('dout4', 0)) & 0xF
+        dout = int(s.get('east4', 0)) & 0xF
         if t < len(in_vals):
             print(f"t={t:02d} in={in_vals[t]:X} out={dout:X}")
         else:

@@ -26,12 +26,12 @@ def main():
         raise SystemExit('src/dst must be within grid bounds')
 
     cells = []
-    # Source beacon cell at (sx,sy): drive its East output from input 'din' via ROUTE4
+    # Source beacon cell at (sx,sy): drive its East output from input 'west' via ROUTE4
     src_in = [
         {"type":"const","value":0},  # N
         {"type":"const","value":0},  # E
         {"type":"const","value":0},  # S
-        {"type":"input","name":"din","bit":0},  # W
+        {"type":"input","name":"west","bit":0},  # W
     ]
     src_cell = Cell(x=sx, y=sy, inputs=src_in, op='ROUTE4', params={'luts': route_luts('E','W')})
     cells.append(src_cell)
@@ -74,16 +74,16 @@ def main():
 
     out_idx = dir_to_idx[last_dir]
     prog = Program(width=W, height=H, cells=cells,
-                   input_bits={'din':[{'type':'input','name':'din','bit':0}]},
-                   output_bits={'dout':[{'type':'cell','x':dx,'y':dy,'out':out_idx}]},
+                   input_bits={'west':[{'type':'input','name':'west','bit':0}]},
+                   output_bits={'east':[{'type':'cell','x':dx,'y':dy,'out':out_idx}]},
                    latency=W+H)
     emu = Emulator(prog)
 
     # Build a step sequence: train ones, then zeros
-    steps = [{"din":1} for _ in range(max(1,args.train))] + [{"din":0} for _ in range(W+H)]
+    steps = [{"west":1} for _ in range(max(1,args.train))] + [{"west":0} for _ in range(W+H)]
     samples = emu.run_stream(steps, cycles_per_step=max(1,args.cps), reset=True)
     for t, s in enumerate(samples):
-        print(f"t={t}: dout={s['dout']}")
+        print(f"t={t}: east={s['east']}")
 
 
 if __name__ == '__main__':

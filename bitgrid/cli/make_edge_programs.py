@@ -30,6 +30,37 @@ def build_right_program(width: int, height: int, lanes: int) -> Program:
     return Program(width=width, height=height, cells=[], input_bits=input_bits, output_bits=output_bits, latency=0)
 
 
+def build_left_program_edge_io(width: int, height: int, lanes: int) -> Program:
+    """Edge-true left: expose only edge buses: west (in) and east (out). east mirrors west.
+    Suitable for physical edge-only I/O models.
+    """
+    if width % 2 or height % 2:
+        raise ValueError('Grid width and height must be even.')
+    if lanes <= 0:
+        raise ValueError('lanes must be > 0')
+    input_bits: Dict[str, List[Dict]] = {'west': [{'type':'input','name':'west','bit':i} for i in range(lanes)]}
+    output_bits: Dict[str, List[Dict]] = {'east': [{'type':'input','name':'west','bit':i} for i in range(lanes)]}
+    return Program(width=width, height=height, cells=[], input_bits=input_bits, output_bits=output_bits, latency=0)
+
+
+def build_right_program_edge_io(width: int, height: int, lanes: int) -> Program:
+    """Edge-true right: expose only edge buses.
+    Input:  west
+    Output: east (primary). Also exposes 'dout' as a legacy alias for compatibility.
+    """
+    if width % 2 or height % 2:
+        raise ValueError('Grid width and height must be even.')
+    if lanes <= 0:
+        raise ValueError('lanes must be > 0')
+    input_bits = {'west': [ {'type':'input','name':'west','bit':i} for i in range(lanes) ]}
+    # Provide both 'east' (primary) and 'dout' (legacy alias) as mirrors for convenience
+    output_bits = {
+        'dout': [ {'type':'input','name':'west','bit':i} for i in range(lanes) ],
+        'east': [ {'type':'input','name':'west','bit':i} for i in range(lanes) ],
+    }
+    return Program(width=width, height=height, cells=[], input_bits=input_bits, output_bits=output_bits, latency=0)
+
+
 def main():
     ap = argparse.ArgumentParser(description='Generate left/right Programs for two-server Hello test (8-bit lanes).')
     ap.add_argument('--left', default='out/left_program.json', help='Path to write left Program JSON')

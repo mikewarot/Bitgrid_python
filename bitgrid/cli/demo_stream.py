@@ -27,9 +27,9 @@ def main():
         raise SystemExit("len must be >=1 and path must fit within width")
 
     cells = []
-    # West-edge injector at (0,y): use input bit 'din' as West input, route out East
+    # West-edge injector at (0,y): use input bit 'west' as West input, route out East
     inj = Cell(x=0, y=y,
-               inputs=[{"type":"const","value":0}, {"type":"const","value":0}, {"type":"const","value":0}, {"type":"input","name":"din","bit":0}],
+               inputs=[{"type":"const","value":0}, {"type":"const","value":0}, {"type":"const","value":0}, {"type":"input","name":"west","bit":0}],
                op='ROUTE4', params={'luts': route_luts('E','W')})
     cells.append(inj)
 
@@ -40,17 +40,17 @@ def main():
                     op='ROUTE4', params={'luts': route_luts('E','W')})
         cells.append(cell)
 
-    # Observe last cell's East output as dout
-    out_map = {"dout": [{"type":"cell","x":1+L-1,"y":y,"out":1}]}
+    # Observe last cell's East output as 'east'
+    out_map = {"east": [{"type":"cell","x":1+L-1,"y":y,"out":1}]}
 
-    prog = Program(width=W, height=H, cells=cells, input_bits={'din':[{'type':'input','name':'din','bit':0}]}, output_bits=out_map, latency=W+H)
+    prog = Program(width=W, height=H, cells=cells, input_bits={'west':[{'type':'input','name':'west','bit':0}]}, output_bits=out_map, latency=W+H)
     emu = Emulator(prog)
 
-    # Stream: one cycle per step, pulse din=1 at t0, then 0s
-    steps = [{"din": 1}] + [{"din": 0} for _ in range(L+4)]
+    # Stream: one cycle per step, pulse west=1 at t0, then 0s
+    steps = [{"west": 1}] + [{"west": 0} for _ in range(L+4)]
     samples = emu.run_stream(steps, cycles_per_step=cps, reset=True)
     for t, s in enumerate(samples):
-        print(f"t={t}: dout={s['dout']}")
+        print(f"t={t}: east={s['east']}")
 
 
 if __name__ == '__main__':

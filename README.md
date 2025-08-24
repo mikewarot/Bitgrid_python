@@ -280,7 +280,7 @@ The router uses A* Manhattan paths and inserts ROUTE4 cells per hop. Basic occup
 - bitgrid.cli.serve_tcp — serve the emulator over TCP using the BGCF runtime protocol
 - bitgrid.cli.bridge_tcp — bridge two servers over a single seam (left.east -> right.west)
 - bitgrid.cli.bgcf_dump — BGCF packet dumper: parse files or run a TCP proxy that logs frames
-- Demos: demo_route4, demo_stream, demo_throughput, demo_edge_io_hello, demo_edge_io_4bit, demo_sum8_correct, demo_stream_sum8
+- Demos: demo_route4, demo_stream, demo_throughput, demo_edge_io_hello, demo_edge_io_4bit, demo_sum8_correct, demo_stream_sum8, demo_hello_linked
 - Tools: bench_cycles (raw two‑phase loop benchmark)
 
 ## Bitstream programming (ASIC/RAM alignment)
@@ -476,6 +476,29 @@ Environment variables (defaults in parentheses):
 
 These knobs make CI and local runs more robust under variable load.
 
+## Visualize and debug Programs
+
+Inspect a Program JSON (cells, LUTs, wiring):
+
+```powershell
+py -m bitgrid.cli.inspect_program --program out/program.json --out out/program_inspect.json
+```
+
+Trace per-subcycle cell outputs and I/O, then view in a simple HTML viewer:
+
+```powershell
+# Produce a JSONL trace of N subcycles at fixed inputs
+py -m bitgrid.cli.trace_cells --program out/program.json --steps 16 --inputs "west=0x1FF" --out out/cell_trace.jsonl
+
+# Open the viewer in a browser and load the JSONL file
+# (File > open out/viewer.html, then pick out/cell_trace.jsonl)
+```
+
+Viewer basics:
+- Shows a W×H grid; each cell displays its 4 output bits (N,E,S,W) per subcycle.
+- Use Prev/Next to step through A/B subcycles.
+- Click a cell to see its outputs and (if known) LUTs.
+
 ## In/out edge-channel program (for duplex demos)
 
 The helper `bitgrid.cli.make_identity_program.build_inout_program()` provides eight named channels:
@@ -541,6 +564,13 @@ One full cycle = A then B. A neighbor hop takes one cycle.
 	- Constant: `{ "type": "const", "value": 0|1 }`
 	- Input bit: `{ "type": "input", "name": "a", "bit": 3 }`
 	- Cell output: `{ "type": "cell", "x": 10, "y": 5, "out": 1 }`
+
+Edge-only I/O convention:
+- For a “real” BitGrid, I/O occurs only on the four chip edges. Programs should use edge buses named `west`, `east`, `north`, `south` (and variants like `*_in`/`*_out`).
+- Builders for edge-true demos:
+	- `bitgrid.cli.make_edge_programs.build_left_program_edge_io(width,height,lanes)` → input `west`, output `east` mirrors it.
+	- `bitgrid.cli.make_edge_programs.build_right_program_edge_io(width,height,lanes)` → input `west`, output `east` mirrors it (and `dout` remains as a legacy alias).
+- The static route viewer places pads on edges based on these names to reflect physical I/O.
 
 This is a compact overview; see code in `bitgrid/program.py`, `bitgrid/emulator.py`, and `bitgrid/router.py` for exact semantics.
 

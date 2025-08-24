@@ -23,12 +23,12 @@ def build_edge_stream_program(width: int, height: int, row0: int, lanes: int, le
     # Build 8 parallel horizontal lanes from x=0 to x=length at rows row0..row0+7
     for i in range(lanes):
         y = row0 + i
-        # Injector at west edge: drive from input 'din' bit i into W pin, route to E
+        # Injector at west edge: drive from input 'west' bit i into W pin, route to E
         inj_inputs = [
             {"type":"const","value":0},  # N
             {"type":"const","value":0},  # E
             {"type":"const","value":0},  # S
-            {"type":"input","name":"din","bit":i},  # W gets din bit i
+            {"type":"input","name":"west","bit":i},  # W gets west bit i
         ]
         inj = Cell(x=0, y=y, inputs=inj_inputs, op='ROUTE4', params={'luts': route_luts('E','W')})
         cells.append(inj)
@@ -41,13 +41,13 @@ def build_edge_stream_program(width: int, height: int, row0: int, lanes: int, le
             cells.append(c)
             prev_src = {"type":"cell","x":x,"y":y,"out":dir_to_idx['E']}
 
-    # Map outputs: 'dout' is 8-bit wide, one bit per lane, sampled at last cell's E output
+    # Map outputs: 'east' is 8-bit wide, one bit per lane, sampled at last cell's E output
     output_bits: Dict[str, List[Dict]] = {
-        'dout': [ {"type":"cell","x":length,"y":row0 + i,"out":dir_to_idx['E']} for i in range(lanes) ]
+        'east': [ {"type":"cell","x":length,"y":row0 + i,"out":dir_to_idx['E']} for i in range(lanes) ]
     }
 
     prog = Program(width=width, height=height, cells=cells,
-                   input_bits={'din': [{'type':'input','name':'din','bit':i} for i in range(lanes)]},
+                   input_bits={'west': [{'type':'input','name':'west','bit':i} for i in range(lanes)]},
                    output_bits=output_bits, latency=width + height)
     return prog
 
@@ -68,18 +68,18 @@ def main():
 
     emu = Emulator(prog)
 
-    # Build steps: feed each character's byte on din each step
+    # Build steps: feed each character's byte on west each step
     message = args.text
-    steps = [{ 'din': ord(ch) & 0xFF } for ch in message]
+    steps = [{ 'west': ord(ch) & 0xFF } for ch in message]
     # Drain zeros to flush pipeline
-    steps += [{ 'din': 0 } for _ in range(args.len + 4)]
+    steps += [{ 'west': 0 } for _ in range(args.len + 4)]
 
     samples = emu.run_stream(steps, cycles_per_step=cps, reset=True)
 
     # Reconstruct output characters: collect first len(message) non-zero bytes
     out_bytes: List[int] = []
     for s in samples:
-        b = int(s.get('dout', 0)) & 0xFF
+        b = int(s.get('east', 0)) & 0xFF
         if b != 0:
             out_bytes.append(b)
             if len(out_bytes) >= len(message):

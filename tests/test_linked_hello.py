@@ -8,7 +8,10 @@ import time
 import unittest
 from typing import Dict, Tuple, List
 
-from bitgrid.cli.make_edge_programs import build_left_program, build_right_program
+from bitgrid.cli.make_edge_programs import (
+    build_left_program_edge_io,
+    build_right_program_edge_io,
+)
 from bitgrid.protocol import (
     pack_frame,
     try_parse_frame,
@@ -83,8 +86,8 @@ class TestLinkedHello(unittest.TestCase):
     def test_linked_hello(self):
         # Build simple left/right programs
         with tempfile.TemporaryDirectory() as td:
-            left_prog = build_left_program(16, 8, 0, 8, 8)
-            right_prog = build_right_program(16, 8, 8)
+            left_prog = build_left_program_edge_io(16, 8, 8)
+            right_prog = build_right_program_edge_io(16, 8, 8)
             left_path = td + '/left_program.json'
             right_path = td + '/right_program.json'
             left_prog.save(left_path)
@@ -148,37 +151,37 @@ class TestLinkedHello(unittest.TestCase):
                             out_bytes: List[int] = []
                             prev = None
                             for ch in message:
-                                _set_inputs(left, {'din': ord(ch) & 0xFF})
+                                _set_inputs(left, {'west': ord(ch) & 0xFF})
                                 _step(left, cps)
                                 # Wait until a new non-zero byte appears (or timeout)
                                 target_len = len(out_bytes) + 1
                                 deadline = time.time() + wait_present
                                 while time.time() < deadline:
                                     m = _get_outputs(right, timeout=0.5)
-                                    b = int(m.get('dout', 0)) & 0xFF
+                                    b = int(m.get('east', 0)) & 0xFF
                                     if b != 0:
                                         out_bytes.append(b)
                                         break
                                     time.sleep(0.005)
                                 # small clear step between chars to avoid coalescing
-                                _set_inputs(left, {'din': 0})
+                                _set_inputs(left, {'west': 0})
                                 _step(left, cps)
                                 # wait for zero to be seen (optional)
                                 deadline2 = time.time() + wait_clear
                                 while time.time() < deadline2:
                                     m2 = _get_outputs(right, timeout=0.5)
-                                    if (int(m2.get('dout', 0)) & 0xFF) == 0:
+                                    if (int(m2.get('east', 0)) & 0xFF) == 0:
                                         break
                                     time.sleep(0.005)
                             # Briefly clear to zero at the end
                             for _ in range(2):
-                                _set_inputs(left, {'din': 0})
+                                _set_inputs(left, {'west': 0})
                                 _step(left, cps)
                             text_out = ''.join(chr(b) for b in out_bytes[:need])
                             self.assertEqual(text_out, message)
                             # Drain a bit more with zeros to avoid cross-case leftovers
                             for _ in range(4):
-                                _set_inputs(left, {'din': 0})
+                                _set_inputs(left, {'west': 0})
                                 _step(left, cps)
                 finally:
                     # Teardown

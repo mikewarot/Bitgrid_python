@@ -68,13 +68,14 @@ def _get_outputs(sock: socket.socket, timeout: float = 2.0) -> Dict[str, int]:
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Demo: send text through two linked servers (left: din -> east; right: west -> dout)')
+    ap = argparse.ArgumentParser(description='Demo: send text through two linked servers (edge-only I/O). Left: west -> east; Right: west -> east')
     ap.add_argument('--left', default='127.0.0.1:9000', help='Left server host:port')
     ap.add_argument('--right', default='127.0.0.1:9002', help='Right server host:port')
     ap.add_argument('--text', default='Hello, World!')
+    ap.add_argument('--left-in-name', default='west')
     ap.add_argument('--left-east-name', default='east')
     ap.add_argument('--right-west-name', default='west')
-    ap.add_argument('--right-out-name', default='dout')
+    ap.add_argument('--right-out-name', default='east')
     ap.add_argument('--cps', type=int, default=2, help='cycles per character (2 recommended)')
     ap.add_argument('--flush', type=int, default=14, help='extra zero-steps to flush pipeline')
     args = ap.parse_args()
@@ -101,7 +102,7 @@ def main():
 
         # Stream chars
         for ch in message:
-            _set_inputs(left, {'din': ord(ch) & 0xFF})
+            _set_inputs(left, {args.left_in_name: ord(ch) & 0xFF})
             _step(left, cps)
             # Poll right output
             m = _get_outputs(right)
@@ -113,7 +114,7 @@ def main():
 
         # Flush zeros
         for _ in range(args.flush):
-            _set_inputs(left, {'din': 0})
+            _set_inputs(left, {args.left_in_name: 0})
             _step(left, cps)
             m = _get_outputs(right)
             b = int(m.get(args.right_out_name, 0)) & 0xFF
