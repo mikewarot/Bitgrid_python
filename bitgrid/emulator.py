@@ -51,42 +51,23 @@ class Emulator:
         in_bits = [self._src_value(c.inputs[i], cur_inputs) if i < len(c.inputs) else 0 for i in range(4)]
         idx = (in_bits[0] & 1) | ((in_bits[1] & 1) << 1) | ((in_bits[2] & 1) << 2) | ((in_bits[3] & 1) << 3)
         params = c.params or {}
-        # Prefer LUT-based evaluation when provided: 'luts' (list of up to 4) or 'lut' (single)
-        if 'luts' in params or 'lut' in params:
-            lparam = params.get('luts', params.get('lut'))
-            if isinstance(lparam, (list, tuple)):
-                l0 = int(lparam[0]) if len(lparam) > 0 else 0
-                l1 = int(lparam[1]) if len(lparam) > 1 else 0
-                l2 = int(lparam[2]) if len(lparam) > 2 else 0
-                l3 = int(lparam[3]) if len(lparam) > 3 else 0
-                return [(l0 >> idx) & 1, (l1 >> idx) & 1, (l2 >> idx) & 1, (l3 >> idx) & 1]
-            else:
-                try:
-                    lut = int(lparam) if lparam is not None else 0
-                except Exception:
-                    lut = 0
-                return [(lut >> idx) & 1, 0, 0, 0]
-
-        # Fallback to op-based logic for legacy cells without LUT params
-        a, b, cin = in_bits[0], in_bits[1], in_bits[2]
-        if c.op == 'BUF':
-            return [a, 0, 0, 0]
-        if c.op == 'NOT':
-            return [1 - a, 0, 0, 0]
-        if c.op == 'AND':
-            return [a & b, 0, 0, 0]
-        if c.op == 'OR':
-            return [a | b, 0, 0, 0]
-        if c.op == 'XOR':
-            return [a ^ b, 0, 0, 0]
-        if c.op == 'ADD_BIT':
-            s = (a ^ b) ^ cin
-            cout = (a & b) | (a & cin) | (b & cin)
-            return [s & 1, cout & 1, 0, 0]
-        if c.op == 'ROUTE4':
-            # No LUTs provided: default zeros
-            return [0, 0, 0, 0]
-        return [0, 0, 0, 0]
+        # LUT-only evaluation: 'luts' (list up to 4) or 'lut' (single on output 0)
+        lparam = params.get('luts', params.get('lut'))
+        if isinstance(lparam, (list, tuple)):
+            l0 = int(lparam[0]) if len(lparam) > 0 else 0
+            l1 = int(lparam[1]) if len(lparam) > 1 else 0
+            l2 = int(lparam[2]) if len(lparam) > 2 else 0
+            l3 = int(lparam[3]) if len(lparam) > 3 else 0
+            return [(l0 >> idx) & 1, (l1 >> idx) & 1, (l2 >> idx) & 1, (l3 >> idx) & 1]
+        else:
+            try:
+                lut = int(lparam) if lparam is not None else 0
+            except Exception:
+                lut = 0
+            # Special-case ROUTE4 with missing LUTs: default zeros for safety
+            if c.op == 'ROUTE4' and lparam is None:
+                return [0, 0, 0, 0]
+            return [(lut >> idx) & 1, 0, 0, 0]
 
     def run_vector(self, inputs: Dict[str, int]) -> Dict[str, int]:
         # two-phase stepping for p.latency cycles

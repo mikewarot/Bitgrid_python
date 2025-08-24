@@ -12,7 +12,7 @@ A small Python toolchain to:
 
 Status: prototype focused on bitwise ops (&, |, ^, ~), shifts (<<, >>), add/sub, and multiply via shift-and-add. Signed math is supported by prefixing widths with 's' (e.g., a:s8).
 
-Important: Grid width and height must be even (A/B parity preserved across the array). The emulator evaluates each cell via 16‑bit truth tables (LUT-first), allowing any function of up to 4 inputs per output.
+Important: Grid width and height must be even (A/B parity preserved across the array). The emulator evaluates each cell via 16‑bit truth tables (LUT-only), allowing any function of up to 4 inputs per output.
 
 ## Quick start
 
@@ -105,7 +105,7 @@ Notes: prototype handles normal numbers and zero, truncates rounding, and omits 
 - Graph JSON: high‑level DAG of multi‑bit operations.
 - Program JSON: BitGrid cells (LUTs), wiring, and I/O mapping. Includes an estimated propagation latency in cycles.
 - Emulator: two‑phase updates per cycle; run for `latency` cycles per input vector before sampling outputs.
-- LUT‑first evaluation: each cell can provide up to 4 outputs from per‑output 16‑bit truth tables. Legacy op codes are still understood.
+- LUT‑only evaluation: each cell provides up to 4 outputs from per‑output 16‑bit truth tables.
 - Even dimensions required: width and height must be even to preserve two‑phase parity across the array.
 
 ## Routing and streaming
