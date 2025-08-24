@@ -24,9 +24,9 @@ def build_right_program(width: int, height: int, lanes: int) -> Program:
         raise ValueError('Grid width and height must be even.')
     if lanes != 8:
         raise ValueError('This demo uses 8 lanes for 8-bit ASCII.')
-    # Trivial: just expose an input bus 'west' and mirror it to an output 'dout'
+    # Trivial: just expose an input bus 'west' and mirror it to an output 'east'
     input_bits = {'west': [ {'type':'input','name':'west','bit':i} for i in range(lanes) ]}
-    output_bits = {'dout': [ {'type':'input','name':'west','bit':i} for i in range(lanes) ]}
+    output_bits = {'east': [ {'type':'input','name':'west','bit':i} for i in range(lanes) ]}
     return Program(width=width, height=height, cells=[], input_bits=input_bits, output_bits=output_bits, latency=0)
 
 
@@ -46,16 +46,15 @@ def build_left_program_edge_io(width: int, height: int, lanes: int) -> Program:
 def build_right_program_edge_io(width: int, height: int, lanes: int) -> Program:
     """Edge-true right: expose only edge buses.
     Input:  west
-    Output: east (primary). Also exposes 'dout' as a legacy alias for compatibility.
+    Output: east
     """
     if width % 2 or height % 2:
         raise ValueError('Grid width and height must be even.')
     if lanes <= 0:
         raise ValueError('lanes must be > 0')
     input_bits = {'west': [ {'type':'input','name':'west','bit':i} for i in range(lanes) ]}
-    # Provide both 'east' (primary) and 'dout' (legacy alias) as mirrors for convenience
+    # Provide only 'east' as the output mirror
     output_bits = {
-        'dout': [ {'type':'input','name':'west','bit':i} for i in range(lanes) ],
         'east': [ {'type':'input','name':'west','bit':i} for i in range(lanes) ],
     }
     return Program(width=width, height=height, cells=[], input_bits=input_bits, output_bits=output_bits, latency=0)

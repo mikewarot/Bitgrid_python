@@ -86,11 +86,11 @@ def main():
 
     # Print per-step IO
     for t, (inv, s) in enumerate(zip(in_vals + [None]*(len(samples)-len(in_vals)), samples)):
-        dout = int(s.get('east4', 0)) & 0xF
+        outv = int(s.get('east4', 0)) & 0xF
         if t < len(in_vals):
-            print(f"t={t:02d} in={in_vals[t]:X} out={dout:X}")
+            print(f"t={t:02d} in={in_vals[t]:X} out={outv:X}")
         else:
-            print(f"t={t:02d} in=  out={dout:X}")
+            print(f"t={t:02d} in=  out={outv:X}")
 
 
 if __name__ == '__main__':

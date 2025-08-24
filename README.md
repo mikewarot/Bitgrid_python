@@ -569,7 +569,7 @@ Edge-only I/O convention:
 - For a “real” BitGrid, I/O occurs only on the four chip edges. Programs should use edge buses named `west`, `east`, `north`, `south` (and variants like `*_in`/`*_out`).
 - Builders for edge-true demos:
 	- `bitgrid.cli.make_edge_programs.build_left_program_edge_io(width,height,lanes)` → input `west`, output `east` mirrors it.
-	- `bitgrid.cli.make_edge_programs.build_right_program_edge_io(width,height,lanes)` → input `west`, output `east` mirrors it (and `dout` remains as a legacy alias).
+	- `bitgrid.cli.make_edge_programs.build_right_program_edge_io(width,height,lanes)` → input `west`, output `east` mirrors it.
 - The static route viewer places pads on edges based on these names to reflect physical I/O.
 
 This is a compact overview; see code in `bitgrid/program.py`, `bitgrid/emulator.py`, and `bitgrid/router.py` for exact semantics.
