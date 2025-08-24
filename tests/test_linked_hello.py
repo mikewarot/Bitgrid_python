@@ -156,7 +156,7 @@ class TestLinkedHello(unittest.TestCase):
                                 while time.time() < deadline:
                                     m = _get_outputs(right, timeout=0.5)
                                     b = int(m.get('dout', 0)) & 0xFF
-                                    if b != 0 and (len(out_bytes) == 0 or b != out_bytes[-1]):
+                                    if b != 0:
                                         out_bytes.append(b)
                                         break
                                     time.sleep(0.005)

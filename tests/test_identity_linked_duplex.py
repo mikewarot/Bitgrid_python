@@ -132,8 +132,9 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                         if i < len(msgR):
                             frameR = (1 << 8) | (ord(msgR[i]) & 0xFF)
                             _set_inputs(right, {'east_in': frameR})
-                        # Step only the left; it will step the right as part of link forwarding
+                        # Step both ends so each owner forwards its link direction
                         _step(left, cps)
+                        _step(right, cps)
                         # Poll receivers on both ends
                         deadline = time.time() + wait_present
                         gotR = (i >= len(msgL))  # if no symbol sent, treat as trivially satisfied
@@ -160,6 +161,7 @@ class TestIdentityLinkedDuplex(unittest.TestCase):
                         if i < len(msgR):
                             _set_inputs(right, {'east_in': 0})
                         _step(left, cps)
+                        _step(right, cps)
                         # Wait for present to drop on both ends
                         deadline2 = time.time() + wait_clear
                         while time.time() < deadline2:
