@@ -393,27 +393,40 @@ py -m bitgrid.cli.serve_tcp --program out/right_program.json --port 9002 --verbo
 py -m bitgrid.cli.bridge_tcp --left 127.0.0.1:9000 --right 127.0.0.1:9002 --epochs 8 --left-east-name east --right-west-name west
 ```
 
-Built-in server-to-server link (experimental):
+Built-in server-to-server links (multi-direction):
 
 ```powershell
 # Start two servers with programs that expose matching seam names
 py -m bitgrid.cli.serve_tcp --program out/left_program.json --port 9000 --verbose
 py -m bitgrid.cli.serve_tcp --program out/right_program.json --port 9002 --verbose
 
-# From any client connected to the LEFT server, request a link to the RIGHT server
-# Format: DIR,LOCAL_OUT,REMOTE_IN,HOST,PORT[,LANES]; DIR can be E or 1 for east
+# From a client connected to the LEFT server, request links to the RIGHT server
+# Payload format: DIR,LOCAL_OUT,REMOTE_IN,HOST,PORT[,LANES]
+# DIR codes: N=0, E=1, S=2, W=3 (letters also accepted)
+
+# East → West
 py -m bitgrid.cli.client_tcp --port 9000 --link E,east,west,127.0.0.1,9002,0
 
-# Now STEP on the left server will interleave steps with the peer and shuttle the seam
-py -m bitgrid.cli.client_tcp --port 9000 --set in=0x0 --step 4 --get
+# West → East (another independent link)
+py -m bitgrid.cli.client_tcp --port 9000 --link W,west,east,127.0.0.1,9002,0
 
-# Tear down the link when done
+# North → South
+py -m bitgrid.cli.client_tcp --port 9000 --link N,north,south,127.0.0.1,9002,0
+
+# South → North
+py -m bitgrid.cli.client_tcp --port 9000 --link S,south,north,127.0.0.1,9002,0
+
+# Tear down all links when done
 py -m bitgrid.cli.client_tcp --port 9000 --unlink
 ```
 
 Notes:
-- Current LINK implementation supports local east → peer west only and relays one cycle at a time per STEP.
-- Lanes defaults to min(local.height, peer.height) when 0 is provided.
+- Multiple concurrent links and all four directions are supported. Lanes default to the min(local seam length, peer seam length) when 0 is provided.
+- Forwarding policy is configurable on the server: `--link-forward both|phase|cycle` (default both).
+	- both: send full vector every subcycle (max bandwidth, simplest)
+	- phase: send only the freshly-produced lanes each subphase (even/odd by parity)
+	- cycle|bonly: send on B subphase only (half bandwidth)
+- Duplex: each server forwards only the links it owns. To advance traffic in both directions per symbol, step both endpoints, e.g. issue STEP on left and right in lockstep. The server suppresses re-forward on forwarded steps to prevent recursion.
 - For observability, you can run the dumper proxy between the client and server; LINK/UNLINK frames are summarized in logs.
 ```
 
@@ -445,6 +458,40 @@ Library API (if you need programmatic access):
 - No external dependencies; Python 3.9+ recommended.
 - Windows PowerShell: replace `python` with `py` if needed.
 - Keep width and height even across tools.
+
+## Tests and timing tolerances
+
+Run the test suite with pytest. On Windows PowerShell:
+
+```powershell
+# Optional: extend timeouts for slower or loaded machines
+$env:BG_TEST_WAIT_SERVER=20; $env:BG_TEST_WAIT_PRESENT=6; $env:BG_TEST_WAIT_CLEAR=6
+py -m pytest -q -rA
+```
+
+Environment variables (defaults in parentheses):
+- BG_TEST_WAIT_SERVER (10.0): seconds to wait for servers to come up and answer HELLO
+- BG_TEST_WAIT_PRESENT (3.0): seconds to wait for present=1 when streaming chars
+- BG_TEST_WAIT_CLEAR (3.0): seconds to wait for present to drop or a zero to be observed between chars
+
+These knobs make CI and local runs more robust under variable load.
+
+## In/out edge-channel program (for duplex demos)
+
+The helper `bitgrid.cli.make_identity_program.build_inout_program()` provides eight named channels:
+
+- Inputs:  `west_in`, `east_in`, `north_in`, `south_in`
+- Outputs: `west_out`, `east_out`, `north_out`, `south_out`
+
+Wiring:
+- Each *_out mirrors the opposite *_in to cross the tile: `west_in → east_out`, `east_in → west_out`, `north_in → south_out`, `south_in → north_out`.
+- Each *_in is also mirrored to an output of the same name for observation.
+
+When linking servers for duplex, a typical setup is:
+- Left→Right: link `left.east_out → right.west_in`; drive `left.west_in`, observe on `right.east_in`.
+- Right→Left: link `right.west_out → left.east_in`; drive `right.east_in`, observe on `left.west_in`.
+
+Because each server only forwards the links it owns, step both ends per symbol (and when clearing between symbols) to keep both directions moving.
 
 ## Design
 
