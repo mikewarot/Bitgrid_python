@@ -116,22 +116,32 @@ class Mapper:
                                     b_src = self._shifted(ins[1], b, 0, width, node)
                         x, y = col, b
                         in_list = [a_src, b_src or {"type": "const", "value": 0}, {"type": "const", "value": 0}, {"type": "const", "value": 0}]
-                        op = 'BUF'
+                        # Build LUT for output 0 based on N=a, E=b, S=0, W=0
+                        def lut_bits_from_fn(fn):
+                            v = 0
+                            for idx in range(16):
+                                n = (idx >> 0) & 1
+                                e = (idx >> 1) & 1
+                                s = (idx >> 2) & 1
+                                w = (idx >> 3) & 1
+                                if fn(n, e, s, w):
+                                    v |= (1 << idx)
+                            return v & 0xFFFF
                         if node.op == 'NOT':
-                            op = 'NOT'
+                            l0 = lut_bits_from_fn(lambda n,e,s,w: 1 - n)
                         elif node.op == 'AND':
-                            op = 'AND'
+                            l0 = lut_bits_from_fn(lambda n,e,s,w: n & e)
                         elif node.op == 'OR':
-                            op = 'OR'
+                            l0 = lut_bits_from_fn(lambda n,e,s,w: n | e)
                         elif node.op == 'XOR':
-                            op = 'XOR'
-                        elif node.op in ('SHL','SHR','SAR'):
-                            # already applied shift to a_src
-                            op = 'BUF'
-                            in_list[0] = a_src
-                        elif node.op == 'BIT':
-                            op = 'BUF'
-                        cell = Cell(x=x, y=y, inputs=in_list, op=op, params={})
+                            l0 = lut_bits_from_fn(lambda n,e,s,w: (n ^ e))
+                        elif node.op in ('SHL','SHR','SAR','BIT'):
+                            # Shifts and BIT select were applied to a_src; LUT is identity on N
+                            l0 = lut_bits_from_fn(lambda n,e,s,w: n)
+                        else:
+                            # Default to BUF
+                            l0 = lut_bits_from_fn(lambda n,e,s,w: n)
+                        cell = Cell(x=x, y=y, inputs=in_list, op='LUT', params={'luts': [l0, 0, 0, 0]})
                         cells.append(cell)
                         node_bits.append({"type": "cell", "x": x, "y": y, "out": 0})
                     bit_sources[nid] = node_bits
@@ -151,7 +161,20 @@ class Mapper:
                         b_src = self._shifted(b_bits, b, 0, width, node)
                         x, y = col, b
                         in_list = [a_src, b_src, carry_in, {"type": "const", "value": 0}]
-                        cell = Cell(x=x, y=y, inputs=in_list, op='ADD_BIT', params={})
+                        # Build LUTs: output0=sum=a^b^cin, output1=carry=maj(a,b,cin)
+                        def lut_bits_from_fn(fn):
+                            v = 0
+                            for idx in range(16):
+                                n = (idx >> 0) & 1  # a
+                                e = (idx >> 1) & 1  # b
+                                s = (idx >> 2) & 1  # cin
+                                w = (idx >> 3) & 1
+                                if fn(n, e, s, w):
+                                    v |= (1 << idx)
+                            return v & 0xFFFF
+                        l_sum = lut_bits_from_fn(lambda n,e,s,w: (n ^ e) ^ s)
+                        l_carry = lut_bits_from_fn(lambda n,e,s,w: (n & e) | (n & s) | (e & s))
+                        cell = Cell(x=x, y=y, inputs=in_list, op='LUT', params={'luts': [l_sum, l_carry, 0, 0]})
                         cells.append(cell)
                         sum_src = {"type": "cell", "x": x, "y": y, "out": 0}
                         carry_out = {"type": "cell", "x": x, "y": y, "out": 1}
