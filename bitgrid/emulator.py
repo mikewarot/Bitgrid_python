@@ -64,9 +64,6 @@ class Emulator:
                 lut = int(lparam) if lparam is not None else 0
             except Exception:
                 lut = 0
-            # Special-case ROUTE4 with missing LUTs: default zeros for safety
-            if c.op == 'ROUTE4' and lparam is None:
-                return [0, 0, 0, 0]
             return [(lut >> idx) & 1, 0, 0, 0]
 
     def run_vector(self, inputs: Dict[str, int]) -> Dict[str, int]:

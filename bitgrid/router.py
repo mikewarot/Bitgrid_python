@@ -34,6 +34,8 @@ class ManhattanRouter:
         self.W = width
         self.H = height
         self.occ = [[False for _ in range(self.H)] for _ in range(self.W)]
+        # Track ROUTE4 cells we create during a routing pass for per-output sharing
+        self._route_cells = {}
 
     def occupy(self, x: int, y: int):
         if 0 <= x < self.W and 0 <= y < self.H:
@@ -150,18 +152,64 @@ class ManhattanRouter:
             else:
                 raise RuntimeError('Non-adjacent hop encountered')
             x, y = nxt
-            self.occupy(x, y)
-            inputs = [ {"type":"const","value":0} for _ in range(4) ]
+            # Create or reuse a ROUTE4 cell here and add mapping for this hop
             opposite = {'E':'W','W':'E','N':'S','S':'N'}[direction]
-            inputs[pin_map[opposite]] = prev_src
-            luts = route_luts(direction, opposite)
-            cell = Cell(x=x, y=y, inputs=inputs, op='ROUTE4', params={'luts': luts})
-            cells.append(cell)
+            cell, created = self._add_or_merge_route4(x, y, out_dir=direction, in_pin=opposite, upstream=prev_src)
+            if created:
+                cells.append(cell)
             prev_src = {"type": "cell", "x": x, "y": y, "out": pin_map[direction]}
             last_dir = direction
             cur = nxt
         # At this point, cur is adjacent to dst, and last_dir points towards dst
         return cells, last_dir, cur
+
+    def _add_or_merge_route4(self, x: int, y: int, out_dir: str, in_pin: str, upstream: Dict) -> Tuple[Cell, bool]:
+        """Ensure there is a ROUTE4 cell at (x,y) with mapping out_dir <- in_pin.
+        If a cell exists from this router pass, merge the mapping (per-output sharing).
+        Otherwise create a new ROUTE4 cell. Returns (cell, created_new).
+        Notes:
+          - We do not merge into non-ROUTE4 compute cells; caller must avoid occupied compute cells.
+          - We forbid double assignment of the same out_dir.
+          - We require unique input pins per cell unless the same upstream source is used.
+        """
+        pin_map = {'N':0,'E':1,'S':2,'W':3}
+        out_idx = pin_map[out_dir]
+        in_idx = pin_map[in_pin]
+        cell = self._route_cells.get((x, y))
+        if cell is None:
+            # Create fresh
+            inputs = [ {"type":"const","value":0} for _ in range(4) ]
+            inputs[in_idx] = upstream
+            luts = [0,0,0,0]
+            # set mapping for out_dir
+            rl = route_luts(out_dir, in_pin)
+            for i in range(4):
+                luts[i] |= rl[i]
+            cell = Cell(x=x, y=y, inputs=inputs, op='ROUTE4', params={'luts': luts})
+            # Mark occupancy and remember for sharing
+            self.occupy(x, y)
+            self._route_cells[(x, y)] = cell
+            return cell, True
+        # Merge into existing route cell created in this pass
+        if cell.op != 'ROUTE4':
+            raise RuntimeError(f'Cannot merge routing into non-ROUTE4 cell at {(x,y)}')
+        # Check output direction availability
+        luts = [int(v) for v in cell.params.get('luts', [0,0,0,0])]
+        if luts[out_idx] != 0:
+            raise RuntimeError(f'ROUTE4 out {out_dir} already assigned at {(x,y)}')
+        # Set/validate upstream on the input pin
+        cur_in = cell.inputs[in_idx]
+        if cur_in.get('type') == 'const' and int(cur_in.get('value',0)) == 0:
+            cell.inputs[in_idx] = upstream
+        else:
+            # If it's not the same source, we disallow sharing that input pin
+            if cur_in != upstream:
+                raise RuntimeError(f'ROUTE4 input pin {in_pin} already used at {(x,y)}')
+        rl = route_luts(out_dir, in_pin)
+        for i in range(4):
+            luts[i] |= rl[i]
+        cell.params['luts'] = luts
+        return cell, False
 
 
 def route_program(prog: Program) -> Program:
