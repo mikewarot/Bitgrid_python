@@ -211,6 +211,172 @@ class ManhattanRouter:
         cell.params['luts'] = luts
         return cell, False
 
+    def wire_from_edge_to(self, side: str, pos: int, dst_cell: Tuple[int,int]) -> Tuple[List[Cell], str, Tuple[int,int]]:
+        """Route from a physical edge location into the grid, stopping adjacent to dst.
+        side in {'N','E','S','W'}; pos is along that edge (x for N/S, y for E/W).
+        Returns (cells, dir_to_dst, last_xy).
+        """
+        # Determine starting in-grid coordinate adjacent to the edge and initial out direction
+        if side == 'W':
+            start = (0, pos)
+            out_dir_first = 'E'
+        elif side == 'E':
+            start = (self.W - 1, pos)
+            out_dir_first = 'W'
+        elif side == 'N':
+            start = (pos, 0)
+            out_dir_first = 'S'
+        elif side == 'S':
+            start = (pos, self.H - 1)
+            out_dir_first = 'N'
+        else:
+            raise ValueError('Invalid side; expected one of N,E,S,W')
+
+        # If the edge-adjacent start cell is occupied by compute, move one cell inward
+        if not self.is_free(start[0], start[1]):
+            # Move one step into the grid along out_dir_first
+            dd = {'E':(1,0), 'W':(-1,0), 'N':(0,-1), 'S':(0,1)}[out_dir_first]
+            alt = (start[0] + dd[0], start[1] + dd[1])
+            if not self.is_free(alt[0], alt[1]):
+                # If still not free, leave as-is and let routing detour
+                pass
+            else:
+                start = alt
+
+        # Helper to compute direction from delta
+        def dir_from_delta(dx: int, dy: int) -> str:
+            if dx == 1: return 'E'
+            if dx == -1: return 'W'
+            if dy == 1: return 'S'
+            if dy == -1: return 'N'
+            raise RuntimeError('Non-adjacent hop encountered')
+
+        # Path from start to dst
+        path = self.route(start, dst_cell)
+        cells: List[Cell] = []
+        cur = start
+        last_dir = out_dir_first
+        pin_map = {'N':0,'E':1,'S':2,'W':3}
+        edge_upstream = {"type":"edge","side":side,"index":int(pos)}
+
+        # Try to reuse an existing start mapping if present and upstream matches
+        reused = False
+        existing = self._route_cells.get(cur)
+        out_idx = pin_map[out_dir_first]
+        if existing is not None and existing.op == 'ROUTE4':
+            luts = [int(v) for v in existing.params.get('luts', [0,0,0,0])]
+            if luts[out_idx] != 0:
+                in_idx = pin_map[side]
+                cur_in = existing.inputs[in_idx]
+                if cur_in == edge_upstream:
+                    prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":out_idx}
+                    hops = path[:-1] if path else []
+                    reused = True
+
+        if not reused:
+            # Try to create the initial mapping at start going towards out_dir_first; if not available, detour
+            try:
+                start_cell, created = self._add_or_merge_route4(cur[0], cur[1], out_dir=out_dir_first, in_pin=side, upstream=edge_upstream)
+                if created:
+                    cells.append(start_cell)
+                prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[out_dir_first]}
+                # Remaining hops exclude the final dst
+                hops = path[:-1] if path else []
+            except RuntimeError as e:
+                msg = str(e)
+                if 'already assigned' not in msg and 'already used' not in msg:
+                    raise
+                # Choose an alternate first direction to avoid port collision
+                alt_dirs = ['N','S'] if side in ('W','E') else ['E','W']
+                chosen = None
+                for d in alt_dirs:
+                    dx, dy = {'N':(0,-1),'S':(0,1),'E':(1,0),'W':(-1,0)}[d]
+                    nx, ny = cur[0]+dx, cur[1]+dy
+                    # must be inside grid and not the destination compute cell
+                    if 0 <= nx < self.W and 0 <= ny < self.H and (nx, ny) != dst_cell:
+                        try:
+                            start_cell, created = self._add_or_merge_route4(cur[0], cur[1], out_dir=d, in_pin=side, upstream=edge_upstream)
+                            if created:
+                                cells.append(start_cell)
+                            prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[d]}
+                            # Now route from this neighbor to dst
+                            sub_path = self.route((nx, ny), dst_cell)
+                            # First hop is to (nx,ny), so prepend that explicitly to traversal
+                            path = [(nx, ny)] + sub_path
+                            chosen = d
+                            break
+                        except RuntimeError:
+                            continue
+                if chosen is None:
+                    # Could not find alternate; rethrow original
+                    raise
+                last_dir = chosen
+                hops = path[:-1] if path else []
+
+        # Walk intermediate hops
+        for nxt in hops:
+            dx = nxt[0] - cur[0]
+            dy = nxt[1] - cur[1]
+            direction = dir_from_delta(dx, dy)
+            x, y = nxt
+            opposite = {'E':'W','W':'E','N':'S','S':'N'}[direction]
+            cell, created = self._add_or_merge_route4(x, y, out_dir=direction, in_pin=opposite, upstream=prev_src)
+            if created:
+                cells.append(cell)
+            prev_src = {"type":"cell","x":x,"y":y,"out":pin_map[direction]}
+            last_dir = direction
+            cur = nxt
+        return cells, last_dir, cur
+
+    def wire_to_edge_from(self, src_cell: Tuple[int,int], side: str, pos: int, src_out: int = 0) -> List[Cell]:
+        """Route from a source cell to a physical edge location. Returns created/merged ROUTE4 cells.
+        The final cell at the edge drives its out_dir equal to the edge side from the opposite pin.
+        """
+        if side == 'W':
+            target = (0, pos)
+        elif side == 'E':
+            target = (self.W - 1, pos)
+        elif side == 'N':
+            target = (pos, 0)
+        elif side == 'S':
+            target = (pos, self.H - 1)
+        else:
+            raise ValueError('Invalid side; expected one of N,E,S,W')
+
+        path = self.route(src_cell, target)
+        cells: List[Cell] = []
+        cur = src_cell
+        pin_map = {'N':0,'E':1,'S':2,'W':3}
+        prev_src = {"type":"cell","x":src_cell[0],"y":src_cell[1],"out":int(src_out)}
+        for i, nxt in enumerate(path):
+            dx = nxt[0] - cur[0]
+            dy = nxt[1] - cur[1]
+            if dx == 1:
+                direction = 'E'
+            elif dx == -1:
+                direction = 'W'
+            elif dy == 1:
+                direction = 'S'
+            elif dy == -1:
+                direction = 'N'
+            else:
+                raise RuntimeError('Non-adjacent hop encountered')
+            x, y = nxt
+            # For intermediate hops, pass-through toward next cell.
+            # For the last hop (edge cell), set out_dir to the edge side to expose on boundary.
+            if i == len(path) - 1:
+                out_dir = side
+                in_pin = {'E':'W','W':'E','N':'S','S':'N'}[side]
+            else:
+                out_dir = direction
+                in_pin = {'E':'W','W':'E','N':'S','S':'N'}[direction]
+            cell, created = self._add_or_merge_route4(x, y, out_dir=out_dir, in_pin=in_pin, upstream=prev_src)
+            if created:
+                cells.append(cell)
+            prev_src = {"type":"cell","x":x,"y":y,"out":pin_map[out_dir]}
+            cur = nxt
+        return cells
+
 
 def route_program(prog: Program) -> Program:
     """

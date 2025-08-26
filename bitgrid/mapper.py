@@ -160,24 +160,28 @@ class Mapper:
                         a_src = self._shifted(a_bits, b, 0, width, node)
                         b_src = self._shifted(b_bits, b, 0, width, node)
                         x, y = col, b
-                        in_list = [a_src, b_src, carry_in, {"type": "const", "value": 0}]
-                        # Build LUTs: output0=sum=a^b^cin, output1=carry=maj(a,b,cin)
+                        # Pin mapping for physical friendliness: N=cin, E=b, S=0, W=a
+                        in_list = [carry_in, b_src, {"type": "const", "value": 0}, a_src]
+                        # Build LUTs with variables (n,e,s,w): a=w, b=e, cin=n
                         def lut_bits_from_fn(fn):
                             v = 0
                             for idx in range(16):
-                                n = (idx >> 0) & 1  # a
-                                e = (idx >> 1) & 1  # b
-                                s = (idx >> 2) & 1  # cin
+                                n = (idx >> 0) & 1
+                                e = (idx >> 1) & 1
+                                s = (idx >> 2) & 1
                                 w = (idx >> 3) & 1
                                 if fn(n, e, s, w):
                                     v |= (1 << idx)
                             return v & 0xFFFF
-                        l_sum = lut_bits_from_fn(lambda n,e,s,w: (n ^ e) ^ s)
-                        l_carry = lut_bits_from_fn(lambda n,e,s,w: (n & e) | (n & s) | (e & s))
-                        cell = Cell(x=x, y=y, inputs=in_list, op='LUT', params={'luts': [l_sum, l_carry, 0, 0]})
+                        # sum = a ^ b ^ cin = w ^ e ^ n
+                        l_sum = lut_bits_from_fn(lambda n,e,s,w: (w ^ e) ^ n)
+                        # carry = majority(a,b,cin) = maj(w,e,n)
+                        l_carry = lut_bits_from_fn(lambda n,e,s,w: (w & e) | (w & n) | (e & n))
+                        # Drive sum on E (output1) and carry on S (output2)
+                        cell = Cell(x=x, y=y, inputs=in_list, op='LUT', params={'luts': [0, l_sum, l_carry, 0]})
                         cells.append(cell)
-                        sum_src = {"type": "cell", "x": x, "y": y, "out": 0}
-                        carry_out = {"type": "cell", "x": x, "y": y, "out": 1}
+                        sum_src = {"type": "cell", "x": x, "y": y, "out": 1}
+                        carry_out = {"type": "cell", "x": x, "y": y, "out": 2}
                         node_bits.append(sum_src)
                         carry_in = carry_out
                     bit_sources[nid] = node_bits
