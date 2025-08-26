@@ -252,6 +252,40 @@ def decompile_lut_to_expr(lut: int) -> str:
         return '0'
     if lut == 0xFFFF:
         return '1'
+    # Prefer XOR (affine) form if possible using ANF
+    def _anf_coeffs(lut_val: int) -> List[int]:
+        # Build table f[mask] = bit for mask 0..15
+        f = [(lut_val >> i) & 1 for i in range(16)]
+        # Möbius transform over 4 variables (NESW bit order 0..3)
+        for i in range(4):
+            step = 1 << i
+            for mask in range(16):
+                if mask & step:
+                    f[mask] ^= f[mask ^ step]
+        return f
+
+    coeffs = _anf_coeffs(lut)
+    # If only constant and linear terms are present, express as XOR of variables (optionally inverted)
+    has_higher = any(coeffs[m] for m in range(16) if m not in (0,1,2,4,8))
+    if not has_higher:
+        parts: List[str] = []
+        if coeffs[1]:
+            parts.append('N')
+        if coeffs[2]:
+            parts.append('E')
+        if coeffs[4]:
+            parts.append('S')
+        if coeffs[8]:
+            parts.append('W')
+        if not parts:
+            # Pure constant
+            return '1' if coeffs[0] else '0'
+        xor_expr = ' ^ '.join(parts) if len(parts) > 1 else parts[0]
+        if coeffs[0]:
+            return f'!({xor_expr})'
+        else:
+            return xor_expr
+
     minterms = _minterm_list_from_lut(lut)
     primes = _qmc_prime_implicants(minterms)
     sel = _select_implicants_cover(primes, set(minterms))
