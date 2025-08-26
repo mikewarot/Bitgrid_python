@@ -9,12 +9,12 @@ from ..router import route_program
 from ..lut_only import grid_from_program
 
 
-def build_adder8_program() -> str:
+def build_adder8_program(sum_width: int = 9) -> str:
     g = Graph()
     g.add_input('a', 8)
     g.add_input('b', 8)
     g.add_node(Node(id='add', op='ADD', inputs=['a', 'b'], width=8))
-    g.set_output('sum', 'add', 8)
+    g.set_output('sum', 'add', sum_width)
     m = Mapper()
     prog = m.map(g)
     return prog.to_json()
@@ -25,6 +25,7 @@ def main():
     ap.add_argument('--program', default='out/adder8_program.json', help='Path to write Program JSON')
     ap.add_argument('--grid', default='out/adder8_grid.json', help='Path to write LUTGrid JSON')
     ap.add_argument('--route', action='store_true', help='Insert ROUTE4 hops before exporting the LUTGrid')
+    ap.add_argument('--sum-width', type=int, default=9, help='Sum output width (8 for no carry, 9 to include carry-out)')
     args = ap.parse_args()
 
     os.makedirs(os.path.dirname(args.program) or '.', exist_ok=True)
@@ -35,7 +36,7 @@ def main():
     g.add_input('a', 8)
     g.add_input('b', 8)
     g.add_node(Node(id='add', op='ADD', inputs=['a', 'b'], width=8))
-    g.set_output('sum', 'add', 8)
+    g.set_output('sum', 'add', int(args.sum_width))
     m = Mapper()
     prog = m.map(g)
     prog.save(args.program)

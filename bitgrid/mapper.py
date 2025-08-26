@@ -90,7 +90,6 @@ class Mapper:
                             a_shift = 0
                             if node.op in ('SHL','SHR','SAR'):
                                 amount = int(node.params.get('amount', 0))
-                                # For output bit b, source index j = b - amount for SHL; j = b + amount for SHR
                                 if node.op == 'SHL':
                                     a_shift = amount
                                 elif node.op in ('SHR','SAR'):
@@ -101,14 +100,11 @@ class Mapper:
                             a_src = self._shifted(ins[0], b, a_shift, width, node, pad)
                         b_src = None
                         if node.op not in ('NOT','BIT') and len(ins) > 1:
-                            # For non-shift ops, use right operand as-is
                             if node.op not in ('SHL','SHR','SAR'):
                                 if len(ins[1]) == 1:
                                     if node.op in ('AND','OR','XOR'):
-                                        # broadcast logic ops
                                         b_src = ins[1][0]
                                     elif node.op == 'ADD':
-                                        # only add to bit 0
                                         b_src = ins[1][0] if b == 0 else {"type": "const", "value": 0}
                                     else:
                                         b_src = self._shifted(ins[1], b, 0, width, node)
@@ -136,10 +132,8 @@ class Mapper:
                         elif node.op == 'XOR':
                             l0 = lut_bits_from_fn(lambda n,e,s,w: (n ^ e))
                         elif node.op in ('SHL','SHR','SAR','BIT'):
-                            # Shifts and BIT select were applied to a_src; LUT is identity on N
                             l0 = lut_bits_from_fn(lambda n,e,s,w: n)
                         else:
-                            # Default to BUF
                             l0 = lut_bits_from_fn(lambda n,e,s,w: n)
                         cell = Cell(x=x, y=y, inputs=in_list, op='LUT', params={'luts': [l0, 0, 0, 0]})
                         cells.append(cell)
@@ -173,17 +167,16 @@ class Mapper:
                                 if fn(n, e, s, w):
                                     v |= (1 << idx)
                             return v & 0xFFFF
-                        # sum = a ^ b ^ cin = w ^ e ^ n
                         l_sum = lut_bits_from_fn(lambda n,e,s,w: (w ^ e) ^ n)
-                        # carry = majority(a,b,cin) = maj(w,e,n)
                         l_carry = lut_bits_from_fn(lambda n,e,s,w: (w & e) | (w & n) | (e & n))
-                        # Drive sum on E (output1) and carry on S (output2)
                         cell = Cell(x=x, y=y, inputs=in_list, op='LUT', params={'luts': [0, l_sum, l_carry, 0]})
                         cells.append(cell)
                         sum_src = {"type": "cell", "x": x, "y": y, "out": 1}
                         carry_out = {"type": "cell", "x": x, "y": y, "out": 2}
                         node_bits.append(sum_src)
                         carry_in = carry_out
+                    # Append final carry-out as MSB bit (index = width)
+                    node_bits.append(carry_in)
                     bit_sources[nid] = node_bits
                     col += 1
                     remaining.remove(nid)
@@ -193,10 +186,7 @@ class Mapper:
                 raise RuntimeError(f'Unsupported op in mapping: {node.op}')
 
             # end for each remaining
-            
-            # end iteration
             if not progressed:
-                # no node was placed; break to avoid infinite loop
                 samples = []
                 for rid in remaining[:10]:
                     rn = g.nodes[rid]
@@ -218,14 +208,21 @@ class Mapper:
                 raise RuntimeError(f'Mapping error: missing bit sources for output source {src}')
             output_bits[name] = src_bits[:sig.width]
 
+        # Ensure sufficient height to place outputs along edge positions (use output width)
+        if output_bits:
+            needed = max((len(bits) for bits in output_bits.values()), default=height)
+            if needed > height:
+                height = needed
+        # Ensure even height for downstream routing that requires even dims
+        if height % 2 != 0:
+            height += 1
+
         # inputs mapping
         input_bits: Dict[str, List[Dict]] = {}
         for name, sig in g.inputs.items():
             input_bits[name] = [{"type": "input", "name": name, "bit": b} for b in range(sig.width)]
 
-        # crude latency estimate: number of placed columns + height for add chains
         latency = width + height
-
         return Program(width=width, height=height, cells=cells, input_bits=input_bits, output_bits=output_bits, latency=latency)
 
     def _shifted(self, bits: List[Dict], idx: int, shift: int, width: int, node: Node, pad: str = 'zero') -> Dict:
