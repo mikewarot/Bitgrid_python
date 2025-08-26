@@ -8,7 +8,8 @@ from ..lut_only import LUTGrid, LUTOnlyEmulator
 def main():
     ap = argparse.ArgumentParser(description='Run the LUT-only emulator from a LUTGrid JSON file.')
     ap.add_argument('--in', dest='inp', required=True, help='input LUTGrid JSON')
-    ap.add_argument('--steps', type=int, default=4, help='Number of subcycles to run')
+    ap.add_argument('--steps', type=int, default=4, help='Number of subcycles to run (two subcycles per full cycle)')
+    ap.add_argument('--cycles', type=int, help='Number of full cycles to run (overrides --steps)')
     ap.add_argument('--west', help='Comma-separated H-length bits to drive on west edge for step 0')
     ap.add_argument('--north', help='Comma-separated W-length bits to drive on north edge for step 0')
     ap.add_argument('--east', help='Comma-separated H-length bits to drive on east edge for step 0')
@@ -19,6 +20,7 @@ def main():
     ap.add_argument('--east-seq', help='Semicolon-separated frames for east edge (each H-length)')
     ap.add_argument('--south-seq', help='Semicolon-separated frames for south edge (each W-length)')
     ap.add_argument('--hold', action='store_true', help='Keep driving provided edge bits every step (sticky inputs)')
+    ap.add_argument('--print-full-cycles', action='store_true', help='Only print outputs after each full cycle (two subcycles). Ignored if --cycles is used (always prints per cycle).')
     args = ap.parse_args()
 
     g = LUTGrid.load(args.inp)
@@ -70,15 +72,29 @@ def main():
                 out[side] = vec
         return out or None
 
-    edge_this = inputs_for_step(0)
-    for i in range(args.steps):
-        out = emu.step(edge_in=edge_this)
-        print(f"step {i}: N={out['N']} E={out['E']} S={out['S']} W={out['W']}")
-        if args.hold:
-            # keep edge_this as-is
-            pass
-        else:
-            edge_this = inputs_for_step(i + 1)
+    if args.cycles is not None:
+        cycles = int(args.cycles)
+        for c in range(cycles):
+            # Drive same inputs for both substeps within the cycle (per-cycle stepping)
+            edge_this = inputs_for_step(c)
+            _ = emu.step(edge_in=edge_this)
+            out = emu.step(edge_in=edge_this)
+            print(f"cycle {c}: N={out['N']} E={out['E']} S={out['S']} W={out['W']}")
+    else:
+        edge_this = inputs_for_step(0)
+        for i in range(args.steps):
+            out = emu.step(edge_in=edge_this)
+            if args.print_full_cycles:
+                if (i % 2) == 1:
+                    cyc = i // 2
+                    print(f"cycle {cyc}: N={out['N']} E={out['E']} S={out['S']} W={out['W']}")
+            else:
+                print(f"step {i}: N={out['N']} E={out['E']} S={out['S']} W={out['W']}")
+            if args.hold:
+                # keep edge_this as-is
+                pass
+            else:
+                edge_this = inputs_for_step(i + 1)
 
 
 if __name__ == '__main__':

@@ -74,7 +74,9 @@ class ManhattanRouter:
             for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
                 nx, ny = x+dx, y+dy
                 if not self.is_free(nx, ny) and (nx, ny) != (tx, ty):
-                    continue
+                    # Allow stepping onto ROUTE4 cells created in this routing pass for sharing/merging
+                    if (nx, ny) not in self._route_cells:
+                        continue
                 # base cost is 1 per move
                 cost = 1.0
                 # apply small penalty for turns relative to arriving direction
@@ -215,7 +217,7 @@ class ManhattanRouter:
         """Route from a physical edge location into the grid, stopping adjacent to dst.
         side in {'N','E','S','W'}; pos is along that edge (x for N/S, y for E/W).
         extra_hops adds intentional detours before reaching dst to increase path length for alignment.
-        Returns (cells, dir_to_dst, last_xy, hop_count).
+        Returns (cells, last_dir, last_xy, hop_count) where last_dir is the direction of the last hop taken.
         hop_count counts the number of inter-cell hops taken (excluding the final neighbor step into dst).
         """
         # Determine starting in-grid coordinate adjacent to the edge and initial out direction
@@ -351,9 +353,10 @@ class ManhattanRouter:
         hop_count = len(hops)
         return cells, last_dir, cur, hop_count
 
-    def wire_to_edge_from(self, src_cell: Tuple[int,int], side: str, pos: int, src_out: int = 0) -> List[Cell]:
+    def wire_to_edge_from(self, src_cell: Tuple[int,int], side: str, pos: int, src_out: int = 0, extra_hops: int = 0) -> List[Cell]:
         """Route from a source cell to a physical edge location. Returns created/merged ROUTE4 cells.
         The final cell at the edge drives its out_dir equal to the edge side from the opposite pin.
+        Optional extra_hops adds detours before reaching the edge to increase path length for alignment.
         """
         if side == 'W':
             target = (0, pos)
@@ -366,7 +369,34 @@ class ManhattanRouter:
         else:
             raise ValueError('Invalid side; expected one of N,E,S,W')
 
-        path = self.route(src_cell, target)
+        # Optional pre-hops detours perpendicular to the edge direction to lengthen the path
+        pre_hops: List[Tuple[int,int]] = []
+        if extra_hops > 0:
+            # Choose detour directions perpendicular to the main heading towards the edge
+            if side in ('W','E'):
+                candidates = [(0,-1), (0,1)]  # N, S
+            else:
+                candidates = [(1,0), (-1,0)]  # E, W
+            cur_det = src_cell
+            added = 0
+            while added < int(extra_hops):
+                placed = False
+                for dx, dy in candidates:
+                    nx, ny = cur_det[0] + dx, cur_det[1] + dy
+                    if 0 <= nx < self.W and 0 <= ny < self.H and self.is_free(nx, ny):
+                        pre_hops.append((nx, ny))
+                        cur_det = (nx, ny)
+                        placed = True
+                        added += 1
+                        break
+                if not placed:
+                    break
+
+        # Route from the last detour (or src) to the target edge cell
+        start_for_route = pre_hops[-1] if pre_hops else src_cell
+        core_path = self.route(start_for_route, target)
+        path: List[Tuple[int,int]] = (pre_hops + core_path) if pre_hops else core_path
+
         cells: List[Cell] = []
         cur = src_cell
         pin_map = {'N':0,'E':1,'S':2,'W':3}
@@ -399,6 +429,105 @@ class ManhattanRouter:
             prev_src = {"type":"cell","x":x,"y":y,"out":pin_map[out_dir]}
             cur = nxt
         return cells
+
+    def wire_edge_to_edge(self, side_src: str, pos_src: int, side_dst: str, pos_dst: int, extra_hops: int = 0) -> Tuple[List[Cell], int]:
+        """Route directly from one physical edge location to another.
+        Returns (created/merged ROUTE4 cells, hop_count). hop_count is number of inter-cell hops.
+        """
+        # Determine starting in-grid coordinate adjacent to source edge and initial out direction
+        if side_src == 'W':
+            start = (0, pos_src)
+            out_dir_first = 'E'
+        elif side_src == 'E':
+            start = (self.W - 1, pos_src)
+            out_dir_first = 'W'
+        elif side_src == 'N':
+            start = (pos_src, 0)
+            out_dir_first = 'S'
+        elif side_src == 'S':
+            start = (pos_src, self.H - 1)
+            out_dir_first = 'N'
+        else:
+            raise ValueError('Invalid side_src')
+
+        # Determine destination edge target cell
+        if side_dst == 'W':
+            target = (0, pos_dst)
+        elif side_dst == 'E':
+            target = (self.W - 1, pos_dst)
+        elif side_dst == 'N':
+            target = (pos_dst, 0)
+        elif side_dst == 'S':
+            target = (pos_dst, self.H - 1)
+        else:
+            raise ValueError('Invalid side_dst')
+
+        # Optional detours to lengthen path
+        pre_hops: List[Tuple[int,int]] = []
+        if extra_hops > 0:
+            if side_src in ('W','E'):
+                candidates = [(0,-1), (0,1)]
+            else:
+                candidates = [(1,0), (-1,0)]
+            cur_det = start
+            added = 0
+            while added < int(extra_hops):
+                placed = False
+                for dx, dy in candidates:
+                    nx, ny = cur_det[0] + dx, cur_det[1] + dy
+                    if 0 <= nx < self.W and 0 <= ny < self.H and self.is_free(nx, ny) and (nx, ny) != target:
+                        pre_hops.append((nx, ny))
+                        cur_det = (nx, ny)
+                        placed = True
+                        added += 1
+                        break
+                if not placed:
+                    break
+
+        # Compute core route
+        start_for_route = pre_hops[-1] if pre_hops else start
+        core_path = self.route(start_for_route, target)
+        path: List[Tuple[int,int]] = (pre_hops + core_path) if pre_hops else core_path
+
+        cells: List[Cell] = []
+        cur = start
+        pin_map = {'N':0,'E':1,'S':2,'W':3}
+        edge_upstream = {"type":"edge","side":side_src,"index":int(pos_src)}
+
+        # Create or reuse initial mapping at start cell from the edge pin to first direction
+        start_cell, created = self._add_or_merge_route4(cur[0], cur[1], out_dir=out_dir_first, in_pin=side_src, upstream=edge_upstream)
+        if created:
+            cells.append(start_cell)
+        prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[out_dir_first]}
+
+        # Walk the path; final hop exposes to destination edge
+        for i, nxt in enumerate(path):
+            dx = nxt[0] - cur[0]
+            dy = nxt[1] - cur[1]
+            if dx == 1:
+                direction = 'E'
+            elif dx == -1:
+                direction = 'W'
+            elif dy == 1:
+                direction = 'S'
+            elif dy == -1:
+                direction = 'N'
+            else:
+                raise RuntimeError('Non-adjacent hop encountered')
+            x, y = nxt
+            if i == len(path) - 1:
+                out_dir = side_dst
+                in_pin = {'E':'W','W':'E','N':'S','S':'N'}[side_dst]
+            else:
+                out_dir = direction
+                in_pin = {'E':'W','W':'E','N':'S','S':'N'}[direction]
+            cell, created = self._add_or_merge_route4(x, y, out_dir=out_dir, in_pin=in_pin, upstream=prev_src)
+            if created:
+                cells.append(cell)
+            prev_src = {"type":"cell","x":x,"y":y,"out":pin_map[out_dir]}
+            cur = nxt
+
+        return cells, len(path)
 
 
 def route_program(prog: Program) -> Program:
