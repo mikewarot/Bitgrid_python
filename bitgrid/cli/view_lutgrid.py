@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 
 from ..lut_only import LUTGrid
 from ..lut_logic import decompile_lut_to_expr
@@ -59,14 +60,17 @@ def main():
                 widths[x] = max(widths[x], len(str(x)))
         # Optional colorization helper (apply at print time)
         color_map = {'N':'36', 'E':'33', 'S':'32', 'W':'35'}  # cyan, yellow, green, magenta
+        dir_eq_re = re.compile(r'([NESW])=([^,]+)')
         def colorize_cell(s: str) -> str:
             if not args.color or not s:
                 return s
-            # Color only the direction letters before '='
-            out = s
-            for d, code in color_map.items():
-                out = out.replace(f"{d}=", f"\x1b[{code}m{d}\x1b[0m=")
-            return out
+            # Color the entire D=expr segment for each comma-separated part
+            def repl(m):
+                d = m.group(1)
+                expr = m.group(2)
+                code = color_map.get(d, '0')
+                return f"\x1b[{code}m{d}={expr}\x1b[0m"
+            return dir_eq_re.sub(repl, s)
         # Print header row if requested
         left_w = len(str(g.H - 1)) if args.headers else 0
         if args.headers:
