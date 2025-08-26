@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..lut_logic import compile_expr_to_lut
+from ..lut_logic import compile_expr_to_lut, decompile_lut_to_expr
 
 
 def expect(expr: str, expected_hex: str):
@@ -26,6 +26,18 @@ def run():
     expect("(N & S) | (E & W)", "0xECA0")
 
     print("OK")
+
+    # Round-trip: expr -> lut -> expr' -> lut
+    for expr in [
+        "N", "E", "S", "W",
+        "N & E", "N | E", "N ^ E",
+        "!N", "(~E)", "(N & S) | (E & W)",
+        "(N & !E) | (!N & E)",
+    ]:
+        lut = compile_expr_to_lut(expr)
+        expr2 = decompile_lut_to_expr(lut)
+        lut2 = compile_expr_to_lut(expr2)
+        assert lut == lut2, f"Round-trip failed for {expr}: {hex(lut)} vs {hex(lut2)} via {expr2}"
 
 
 if __name__ == "__main__":
