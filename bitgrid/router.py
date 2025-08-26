@@ -211,10 +211,12 @@ class ManhattanRouter:
         cell.params['luts'] = luts
         return cell, False
 
-    def wire_from_edge_to(self, side: str, pos: int, dst_cell: Tuple[int,int]) -> Tuple[List[Cell], str, Tuple[int,int]]:
+    def wire_from_edge_to(self, side: str, pos: int, dst_cell: Tuple[int,int], extra_hops: int = 0) -> Tuple[List[Cell], str, Tuple[int,int], int]:
         """Route from a physical edge location into the grid, stopping adjacent to dst.
         side in {'N','E','S','W'}; pos is along that edge (x for N/S, y for E/W).
-        Returns (cells, dir_to_dst, last_xy).
+        extra_hops adds intentional detours before reaching dst to increase path length for alignment.
+        Returns (cells, dir_to_dst, last_xy, hop_count).
+        hop_count counts the number of inter-cell hops taken (excluding the final neighbor step into dst).
         """
         # Determine starting in-grid coordinate adjacent to the edge and initial out direction
         if side == 'W':
@@ -237,10 +239,7 @@ class ManhattanRouter:
             # Move one step into the grid along out_dir_first
             dd = {'E':(1,0), 'W':(-1,0), 'N':(0,-1), 'S':(0,1)}[out_dir_first]
             alt = (start[0] + dd[0], start[1] + dd[1])
-            if not self.is_free(alt[0], alt[1]):
-                # If still not free, leave as-is and let routing detour
-                pass
-            else:
+            if self.is_free(alt[0], alt[1]):
                 start = alt
 
         # Helper to compute direction from delta
@@ -251,8 +250,30 @@ class ManhattanRouter:
             if dy == -1: return 'N'
             raise RuntimeError('Non-adjacent hop encountered')
 
-        # Path from start to dst
-        path = self.route(start, dst_cell)
+        # Build optional pre-hops (detours) to increase path length for alignment
+        pre_hops: List[Tuple[int,int]] = []
+        cur_for_prehops = start
+        if extra_hops > 0:
+            if side in ('W','E'):
+                perp_order = [(0,-1), (0,1)]  # N, S
+            else:
+                perp_order = [(1,0), (-1,0)]  # E, W
+            added = 0
+            while added < int(extra_hops):
+                placed = False
+                for dxp, dyp in perp_order:
+                    nxp, nyp = cur_for_prehops[0] + dxp, cur_for_prehops[1] + dyp
+                    if 0 <= nxp < self.W and 0 <= nyp < self.H and self.is_free(nxp, nyp) and (nxp, nyp) != dst_cell:
+                        pre_hops.append((nxp, nyp))
+                        cur_for_prehops = (nxp, nyp)
+                        placed = True
+                        added += 1
+                        break
+                if not placed:
+                    break
+
+        # Path from current to dst
+        path = self.route(cur_for_prehops, dst_cell)
         cells: List[Cell] = []
         cur = start
         last_dir = out_dir_first
@@ -270,7 +291,7 @@ class ManhattanRouter:
                 cur_in = existing.inputs[in_idx]
                 if cur_in == edge_upstream:
                     prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":out_idx}
-                    hops = path[:-1] if path else []
+                    hops = pre_hops + (path[:-1] if path else [])
                     reused = True
 
         if not reused:
@@ -281,7 +302,7 @@ class ManhattanRouter:
                     cells.append(start_cell)
                 prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[out_dir_first]}
                 # Remaining hops exclude the final dst
-                hops = path[:-1] if path else []
+                hops = pre_hops + (path[:-1] if path else [])
             except RuntimeError as e:
                 msg = str(e)
                 if 'already assigned' not in msg and 'already used' not in msg:
@@ -301,8 +322,8 @@ class ManhattanRouter:
                             prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[d]}
                             # Now route from this neighbor to dst
                             sub_path = self.route((nx, ny), dst_cell)
-                            # First hop is to (nx,ny), so prepend that explicitly to traversal
-                            path = [(nx, ny)] + sub_path
+                            # Prepend detours and the first hop explicitly to traversal
+                            path = pre_hops + [(nx, ny)] + sub_path
                             chosen = d
                             break
                         except RuntimeError:
@@ -326,7 +347,9 @@ class ManhattanRouter:
             prev_src = {"type":"cell","x":x,"y":y,"out":pin_map[direction]}
             last_dir = direction
             cur = nxt
-        return cells, last_dir, cur
+
+        hop_count = len(hops)
+        return cells, last_dir, cur, hop_count
 
     def wire_to_edge_from(self, src_cell: Tuple[int,int], side: str, pos: int, src_out: int = 0) -> List[Cell]:
         """Route from a source cell to a physical edge location. Returns created/merged ROUTE4 cells.
