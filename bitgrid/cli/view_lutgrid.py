@@ -13,6 +13,10 @@ def main():
     ap.add_argument('--dirs', default='NESW', help='Filter which directions to show (subset of NESW), default NESW')
     ap.add_argument('--truncate', type=int, default=0, help='Truncate each cell string to N chars (0 = no truncation)')
     ap.add_argument('--cell-width', type=int, default=0, help='Fixed cell width (0 = auto per column)')
+    ap.add_argument('--raw', action='store_true', help='Show raw LUT integers per selected direction (e.g., E=43690)')
+    ap.add_argument('--truth', action='store_true', help='Show LUTs as 4-hex per selected direction (e.g., E=AAAA)')
+    ap.add_argument('--headers', action='store_true', help='Show column/row headers and do not skip empty rows')
+    ap.add_argument('--color', action='store_true', help='ANSI colorize direction letters (N/E/S/W)')
     args = ap.parse_args()
 
     g = LUTGrid.load(args.inp)
@@ -29,12 +33,19 @@ def main():
                     i = dir_to_idx[d]
                     v = c.luts[i]
                     if v:
-                        parts.append(f"{d}={decompile_lut_to_expr(v)}")
+                        if args.raw:
+                            parts.append(f"{d}={v}")
+                        elif args.truth:
+                            parts.append(f"{d}={v:04X}")
+                        else:
+                            parts.append(f"{d}={decompile_lut_to_expr(v)}")
                 s = ','.join(parts)
                 if args.truncate and len(s) > args.truncate:
                     s = s[:max(1, args.truncate-1)] + '…'
-                # Keep coordinate prefix only when there is content
-                cells[y][x] = (f"({x},{y}):" + s) if s else ""
+                # Coordinates: include only if not using headers and there is content
+                if s and not args.headers:
+                    s = f"({x},{y}):" + s
+                cells[y][x] = s
         # Determine column widths
         widths = [0]*g.W
         for x in range(g.W):
@@ -42,7 +53,27 @@ def main():
                 widths[x] = args.cell_width
             else:
                 widths[x] = max((len(cells[y][x]) for y in range(g.H)), default=0)
-        # Print rows with padding; center each cell like your original
+        # If headers, ensure header numbers fit
+        if args.headers:
+            for x in range(g.W):
+                widths[x] = max(widths[x], len(str(x)))
+        # Optional colorization helper (apply at print time)
+        color_map = {'N':'36', 'E':'33', 'S':'32', 'W':'35'}  # cyan, yellow, green, magenta
+        def colorize_cell(s: str) -> str:
+            if not args.color or not s:
+                return s
+            # Color only the direction letters before '='
+            out = s
+            for d, code in color_map.items():
+                out = out.replace(f"{d}=", f"\x1b[{code}m{d}\x1b[0m=")
+            return out
+        # Print header row if requested
+        left_w = len(str(g.H - 1)) if args.headers else 0
+        if args.headers:
+            header_cells = [(str(x).center(widths[x]) if widths[x] > 0 else str(x)) for x in range(g.W)]
+            left_pad = ' ' * (left_w + 1) if left_w > 0 else ''
+            print(left_pad + ' :: '.join(header_cells))
+        # Print rows with padding; center each cell; include row labels when headers
         for y in range(g.H):
             row_strs = []
             for x in range(g.W):
@@ -50,10 +81,14 @@ def main():
                 s = cells[y][x]
                 if w > 0:
                     s = s.center(w)
-                row_strs.append(s)
+                row_strs.append(colorize_cell(s))
             line = ' :: '.join(row_strs).rstrip()
-            if any(cells[y]):
-                print(line)
+            if args.headers:
+                label = str(y).rjust(left_w) + ' ' if left_w > 0 else ''
+                print(label + line)
+            else:
+                if any(cells[y]):
+                    print(line)
     else:
         for y in range(g.H):
             for x in range(g.W):
