@@ -36,6 +36,8 @@ class ManhattanRouter:
         self.occ = [[False for _ in range(self.H)] for _ in range(self.W)]
         # Track ROUTE4 cells we create during a routing pass for per-output sharing
         self._route_cells = {}
+        # Track edge fanout branches per lane
+        self._edge_fanout_index = {}
 
     def occupy(self, x: int, y: int):
         if 0 <= x < self.W and 0 <= y < self.H:
@@ -44,7 +46,7 @@ class ManhattanRouter:
     def is_free(self, x: int, y: int) -> bool:
         return (0 <= x < self.W and 0 <= y < self.H and not self.occ[x][y])
 
-    def route(self, src: Tuple[int,int], dst: Tuple[int,int], turn_penalty: float = 0.0) -> List[Tuple[int,int]]:
+    def route(self, src: Tuple[int,int], dst: Tuple[int,int], turn_penalty: float = 0.0, avoid_moves: Optional[set] = None) -> List[Tuple[int,int]]:
         # A* Manhattan routing with 4-neighbor moves and simple occupancy.
         # Optional turn_penalty (>0) biases toward straighter paths (fewer corners).
         sx, sy = src
@@ -73,6 +75,20 @@ class ManhattanRouter:
             closed.add((x, y))
             for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
                 nx, ny = x+dx, y+dy
+                # Respect explicit avoid list of moves (from (x,y) in direction (dx,dy))
+                if avoid_moves is not None:
+                    if dx == 1:
+                        dname = 'E'
+                    elif dx == -1:
+                        dname = 'W'
+                    elif dy == 1:
+                        dname = 'S'
+                    elif dy == -1:
+                        dname = 'N'
+                    else:
+                        dname = None
+                    if dname is not None and (x, y, dname) in avoid_moves:
+                        continue
                 if not self.is_free(nx, ny) and (nx, ny) != (tx, ty):
                     # Allow stepping onto ROUTE4 cells created in this routing pass for sharing/merging
                     if (nx, ny) not in self._route_cells:
@@ -198,6 +214,13 @@ class ManhattanRouter:
         # Check output direction availability
         luts = [int(v) for v in cell.params.get('luts', [0,0,0,0])]
         if luts[out_idx] != 0:
+            # If already assigned, allow reuse if mapping is identical and input pin upstream matches
+            expected = route_luts(out_dir, in_pin)[out_idx]
+            if luts[out_idx] == expected:
+                cur_in = cell.inputs[in_idx]
+                if cur_in == upstream:
+                    # Safe to reuse existing mapping
+                    return cell, False
             raise RuntimeError(f'ROUTE4 out {out_dir} already assigned at {(x,y)}')
         # Set/validate upstream on the input pin
         cur_in = cell.inputs[in_idx]
@@ -220,31 +243,29 @@ class ManhattanRouter:
         Returns (cells, last_dir, last_xy, hop_count) where last_dir is the direction of the last hop taken.
         hop_count counts the number of inter-cell hops taken (excluding the final neighbor step into dst).
         """
-        # Determine starting in-grid coordinate adjacent to the edge and initial out direction
+        # Determine start and primary outward direction
         if side == 'W':
             start = (0, pos)
-            out_dir_first = 'E'
+            primary = 'E'
         elif side == 'E':
             start = (self.W - 1, pos)
-            out_dir_first = 'W'
+            primary = 'W'
         elif side == 'N':
             start = (pos, 0)
-            out_dir_first = 'S'
+            primary = 'S'
         elif side == 'S':
             start = (pos, self.H - 1)
-            out_dir_first = 'N'
+            primary = 'N'
         else:
             raise ValueError('Invalid side; expected one of N,E,S,W')
 
-        # If the edge-adjacent start cell is occupied by compute, move one cell inward
+        # If start is compute-occupied, step one inward along primary
         if not self.is_free(start[0], start[1]):
-            # Move one step into the grid along out_dir_first
-            dd = {'E':(1,0), 'W':(-1,0), 'N':(0,-1), 'S':(0,1)}[out_dir_first]
+            dd = {'N':(0,-1),'E':(1,0),'S':(0,1),'W':(-1,0)}[primary]
             alt = (start[0] + dd[0], start[1] + dd[1])
             if self.is_free(alt[0], alt[1]):
                 start = alt
 
-        # Helper to compute direction from delta
         def dir_from_delta(dx: int, dy: int) -> str:
             if dx == 1: return 'E'
             if dx == -1: return 'W'
@@ -252,105 +273,206 @@ class ManhattanRouter:
             if dy == -1: return 'N'
             raise RuntimeError('Non-adjacent hop encountered')
 
-        # Build optional pre-hops (detours) to increase path length for alignment
-        pre_hops: List[Tuple[int,int]] = []
-        cur_for_prehops = start
+        # Avoid retrograde moves back to boundary
+        avoid_moves: set = set()
+        if side == 'W':
+            for y in range(self.H):
+                avoid_moves.add((1, y, 'W'))
+        elif side == 'E':
+            for y in range(self.H):
+                avoid_moves.add((self.W-2, y, 'E'))
+        elif side == 'N':
+            for x in range(self.W):
+                avoid_moves.add((x, 1, 'N'))
+        elif side == 'S':
+            for x in range(self.W):
+                avoid_moves.add((x, self.H-2, 'S'))
+
+        # Also avoid using already-occupied out directions on existing route cells
+        for (rx, ry), rcell in list(self._route_cells.items()):
+            if rcell.op != 'ROUTE4':
+                continue
+            luts_used = [int(v) for v in rcell.params.get('luts', [0,0,0,0])]
+            for dname, idx in (('N',0),('E',1),('S',2),('W',3)):
+                if luts_used[idx] != 0:
+                    avoid_moves.add((rx, ry, dname))
+
+        cells: List[Cell] = []
+        cur = start
+        last_dir = primary
+        pin_map = {'N':0,'E':1,'S':2,'W':3}
+        edge_upstream = {"type":"edge","side":side,"index":int(pos)}
+
+        # Try to reuse start mapping if compatible
+        reused = False
+        existing = self._route_cells.get(cur)
+        if existing is not None and existing.op == 'ROUTE4':
+            luts = [int(v) for v in existing.params.get('luts', [0,0,0,0])]
+            if existing.inputs[pin_map[side]] == edge_upstream and luts[pin_map[primary]] != 0:
+                prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[primary]}
+                reused = True
+
+        if not reused:
+            # Create mapping at start; if collision, try alternates
+            try:
+                start_cell, created = self._add_or_merge_route4(cur[0], cur[1], out_dir=primary, in_pin=side, upstream=edge_upstream)
+                if created:
+                    cells.append(start_cell)
+                prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[primary]}
+                chosen_dir = primary
+            except RuntimeError as e:
+                if 'already' not in str(e):
+                    raise
+                chosen = None
+                for d in (['E','W','N','S'] if side in ('W','E') else ['N','S','E','W']):
+                    if d == primary:
+                        continue
+                    try:
+                        start_cell, created = self._add_or_merge_route4(cur[0], cur[1], out_dir=d, in_pin=side, upstream=edge_upstream)
+                        if created:
+                            cells.append(start_cell)
+                        prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[d]}
+                        chosen = d
+                        break
+                    except RuntimeError:
+                        continue
+                if chosen is None:
+                    raise
+                last_dir = chosen
+                chosen_dir = chosen
+
+        # Compute first step one hop into grid along chosen_dir
+        if 'chosen_dir' not in locals():
+            chosen_dir = primary
+        dd_first = {'N':(0,-1),'E':(1,0),'S':(0,1),'W':(-1,0)}[chosen_dir]
+        first_step: Optional[Tuple[int,int]] = None
+        nx0, ny0 = start[0] + dd_first[0], start[1] + dd_first[1]
+        if 0 <= nx0 < self.W and 0 <= ny0 < self.H and (nx0, ny0) != dst_cell:
+            first_step = (nx0, ny0)
+
+        # Build detours starting from first_step (or start if not valid)
+        detours: List[Tuple[int,int]] = []
+        base = first_step if first_step is not None else start
+        cur_det = base
         if extra_hops > 0:
-            if side in ('W','E'):
-                perp_order = [(0,-1), (0,1)]  # N, S
-            else:
-                perp_order = [(1,0), (-1,0)]  # E, W
+            perp = [(0,-1),(0,1)] if side in ('W','E') else [(1,0),(-1,0)]
             added = 0
             while added < int(extra_hops):
                 placed = False
-                for dxp, dyp in perp_order:
-                    nxp, nyp = cur_for_prehops[0] + dxp, cur_for_prehops[1] + dyp
+                for dxp, dyp in perp:
+                    nxp, nyp = cur_det[0] + dxp, cur_det[1] + dyp
                     if 0 <= nxp < self.W and 0 <= nyp < self.H and self.is_free(nxp, nyp) and (nxp, nyp) != dst_cell:
-                        pre_hops.append((nxp, nyp))
-                        cur_for_prehops = (nxp, nyp)
+                        detours.append((nxp, nyp))
+                        cur_det = (nxp, nyp)
                         placed = True
                         added += 1
                         break
                 if not placed:
                     break
 
-        # Path from current to dst
-        path = self.route(cur_for_prehops, dst_cell)
-        cells: List[Cell] = []
-        cur = start
-        last_dir = out_dir_first
-        pin_map = {'N':0,'E':1,'S':2,'W':3}
-        edge_upstream = {"type":"edge","side":side,"index":int(pos)}
+        # Per-edge fanout stride along chosen_dir from end of detours
+        k = int(self._edge_fanout_index.get((side, int(pos)), 0))
+        if k > 0:
+            dd = {'N':(0,-1),'E':(1,0),'S':(0,1),'W':(-1,0)}[chosen_dir]
+            cx, cy = cur_det
+            for _ in range(k):
+                nx, ny = cx + dd[0], cy + dd[1]
+                if 0 <= nx < self.W and 0 <= ny < self.H and (nx, ny) != dst_cell:
+                    detours.append((nx, ny))
+                    cx, cy = nx, ny
+                else:
+                    break
+            cur_det = (cx, cy)
 
-        # Try to reuse an existing start mapping if present and upstream matches
-        reused = False
-        existing = self._route_cells.get(cur)
-        out_idx = pin_map[out_dir_first]
-        if existing is not None and existing.op == 'ROUTE4':
-            luts = [int(v) for v in existing.params.get('luts', [0,0,0,0])]
-            if luts[out_idx] != 0:
-                in_idx = pin_map[side]
-                cur_in = existing.inputs[in_idx]
-                if cur_in == edge_upstream:
-                    prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":out_idx}
-                    hops = pre_hops + (path[:-1] if path else [])
-                    reused = True
-
-        if not reused:
-            # Try to create the initial mapping at start going towards out_dir_first; if not available, detour
+        # Route from last detour (or first_step/base) to dst
+        start_for_core = cur_det
+        try:
+            core = self.route(start_for_core, dst_cell, avoid_moves=avoid_moves)
+        except RuntimeError:
+            # Retry without avoid rules
             try:
-                start_cell, created = self._add_or_merge_route4(cur[0], cur[1], out_dir=out_dir_first, in_pin=side, upstream=edge_upstream)
-                if created:
-                    cells.append(start_cell)
-                prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[out_dir_first]}
-                # Remaining hops exclude the final dst
-                hops = pre_hops + (path[:-1] if path else [])
-            except RuntimeError as e:
-                msg = str(e)
-                if 'already assigned' not in msg and 'already used' not in msg:
-                    raise
-                # Choose an alternate first direction to avoid port collision
-                alt_dirs = ['N','S'] if side in ('W','E') else ['E','W']
-                chosen = None
-                for d in alt_dirs:
-                    dx, dy = {'N':(0,-1),'S':(0,1),'E':(1,0),'W':(-1,0)}[d]
-                    nx, ny = cur[0]+dx, cur[1]+dy
-                    # must be inside grid and not the destination compute cell
-                    if 0 <= nx < self.W and 0 <= ny < self.H and (nx, ny) != dst_cell:
-                        try:
-                            start_cell, created = self._add_or_merge_route4(cur[0], cur[1], out_dir=d, in_pin=side, upstream=edge_upstream)
-                            if created:
-                                cells.append(start_cell)
-                            prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[d]}
-                            # Now route from this neighbor to dst
-                            sub_path = self.route((nx, ny), dst_cell)
-                            # Prepend detours and the first hop explicitly to traversal
-                            path = pre_hops + [(nx, ny)] + sub_path
-                            chosen = d
-                            break
-                        except RuntimeError:
-                            continue
-                if chosen is None:
-                    # Could not find alternate; rethrow original
-                    raise
-                last_dir = chosen
-                hops = path[:-1] if path else []
+                core = self.route(start_for_core, dst_cell, avoid_moves=None)
+            except RuntimeError:
+                # Try from first_step directly if available
+                alt_start = first_step if first_step is not None else start_for_core
+                try:
+                    core = self.route(alt_start, dst_cell, avoid_moves=None)
+                except RuntimeError:
+                    # Last resort: try from start with no detours
+                    core = self.route(start, dst_cell, avoid_moves=None)
 
-        # Walk intermediate hops
-        for nxt in hops:
-            dx = nxt[0] - cur[0]
-            dy = nxt[1] - cur[1]
-            direction = dir_from_delta(dx, dy)
-            x, y = nxt
-            opposite = {'E':'W','W':'E','N':'S','S':'N'}[direction]
-            cell, created = self._add_or_merge_route4(x, y, out_dir=direction, in_pin=opposite, upstream=prev_src)
-            if created:
-                cells.append(cell)
-            prev_src = {"type":"cell","x":x,"y":y,"out":pin_map[direction]}
-            last_dir = direction
-            cur = nxt
-
+        # Build hop list excluding final step into dst
+        hops: List[Tuple[int,int]] = []
+        if first_step is not None:
+            hops.append(first_step)
+        hops.extend(detours)
+        if core:
+            hops.extend(core[:-1])
         hop_count = len(hops)
+
+        # Determine the direction from the last hop cell into the destination
+        if core and len(core) >= 1:
+            last_cell_for_core = hops[-1] if hops else start
+            # dir from last route cell to dst (core[-1] is dst)
+            ddx = core[-1][0] - last_cell_for_core[0]
+            ddy = core[-1][1] - last_cell_for_core[1]
+            dir_to_dst = dir_from_delta(ddx, ddy) if (ddx != 0 or ddy != 0) else last_dir
+        else:
+            dir_to_dst = last_dir
+
+        hop_count = 0
+        idx = 0
+        while idx < len(hops):
+            hop = hops[idx]
+            # incoming direction: from cur to hop
+            dx_in = hop[0] - cur[0]
+            dy_in = hop[1] - cur[1]
+            in_dir = dir_from_delta(dx_in, dy_in)
+            # outgoing direction: to next hop or toward dst
+            if idx + 1 < len(hops):
+                nx, ny = hops[idx+1]
+                dx_out = nx - hop[0]
+                dy_out = ny - hop[1]
+                out_dir = dir_from_delta(dx_out, dy_out)
+            else:
+                # Final hop points towards the destination
+                if core and len(core) >= 1:
+                    last_cell_for_core = hop if hop is not None else cur
+                    ddx = core[-1][0] - last_cell_for_core[0]
+                    ddy = core[-1][1] - last_cell_for_core[1]
+                    out_dir = dir_from_delta(ddx, ddy) if (ddx != 0 or ddy != 0) else last_dir
+                else:
+                    out_dir = last_dir
+            x, y = hop
+            opposite = {'E':'W','W':'E','N':'S','S':'N'}[in_dir]
+            try:
+                cell, created = self._add_or_merge_route4(x, y, out_dir=out_dir, in_pin=opposite, upstream=prev_src)
+                if created:
+                    cells.append(cell)
+                prev_src = {"type":"cell","x":x,"y":y,"out":pin_map[out_dir]}
+                last_dir = out_dir
+                cur = hop
+                hop_count += 1
+                idx += 1
+            except RuntimeError as e:
+                if 'already' not in str(e):
+                    raise
+                # Avoid using this out direction at this cell and recompute the remainder route
+                avoid_moves.add((x, y, out_dir))
+                try:
+                    new_core = self.route(cur, dst_cell, avoid_moves=avoid_moves)
+                except RuntimeError:
+                    try:
+                        new_core = self.route(cur, dst_cell, avoid_moves=None)
+                    except RuntimeError:
+                        # Give up
+                        raise
+                # Rebuild hops from current position
+                hops = new_core[:-1] if new_core else []
+                idx = 0
+
+        # Success; bump fanout index for this edge lane
+        self._edge_fanout_index[(side, int(pos))] = k + 1
         return cells, last_dir, cur, hop_count
 
     def wire_to_edge_from(self, src_cell: Tuple[int,int], side: str, pos: int, src_out: int = 0, extra_hops: int = 0) -> List[Cell]:
