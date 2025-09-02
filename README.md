@@ -602,3 +602,13 @@ Why 0xFF00? For index 0..15, the west input equals bit `(idx>>3)&1`. That is 0 f
 - Streaming shows zeros: ensure `--cps` is high enough for the logic latency. Pure routing needs cps≈2 per hop; adders add internal ripple cycles. Use the correctness demo or increase `--cps`.
 - ROUTE4 forwarding unexpected: check direction indices (N=0,E=1,S=2,W=3) and ensure the intended input pin is wired when generating LUTs via `route_luts`.
 - Performance: use `bitgrid.cli.bench_cycles` for a raw two-phase loop sanity check. Avoid verbose logging when benchmarking.
+
+
+## Notes
+
+To run the test suite later using this repo's virtual environment (Windows PowerShell):
+
+```powershell
+C:/BitGrid_Python/.venv/Scripts/python.exe -m pytest -q -rA
+```
+

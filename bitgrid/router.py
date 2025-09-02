@@ -145,10 +145,18 @@ class ManhattanRouter:
 
     def wire_adjacent_to(self, src_cell: Tuple[int,int], dst_cell: Tuple[int,int], src_out: int = 0) -> Tuple[List[Cell], str, Tuple[int,int]]:
         # Route from src to a neighbor of dst (stop one hop before dst). Returns (cells, dir_to_dst, last_xy).
+        def dir_from_delta(dx: int, dy: int) -> str:
+            if dx == 1: return 'E'
+            if dx == -1: return 'W'
+            if dy == 1: return 'S'
+            if dy == -1: return 'N'
+            raise RuntimeError('Non-adjacent hop encountered')
+
         path = self.route(src_cell, dst_cell)
         if not path:
             # already at dst; no routing and no adjacency
             return [], 'E', src_cell
+
         # stop before reaching dst
         hops = path[:-1]
         cells: List[Cell] = []
@@ -156,28 +164,35 @@ class ManhattanRouter:
         cur = src_cell
         last_dir = 'E'
         pin_map = {'N':0,'E':1,'S':2,'W':3}
-        for nxt in hops:
+
+        # Determine direction from final hop cell toward the destination
+        if hops:
+            last_hop_cell = hops[-1]
+        else:
+            last_hop_cell = src_cell
+        ddx = path[-1][0] - last_hop_cell[0]
+        ddy = path[-1][1] - last_hop_cell[1]
+        dir_to_dst = dir_from_delta(ddx, ddy)
+
+        # Walk hops and configure ROUTE4 cells; final hop cell must drive toward the destination
+        for idx, nxt in enumerate(hops):
             dx = nxt[0] - cur[0]
             dy = nxt[1] - cur[1]
-            if dx == 1:
-                direction = 'E'
-            elif dx == -1:
-                direction = 'W'
-            elif dy == 1:
-                direction = 'S'
-            elif dy == -1:
-                direction = 'N'
-            else:
-                raise RuntimeError('Non-adjacent hop encountered')
+            direction = dir_from_delta(dx, dy)
             x, y = nxt
-            # Create or reuse a ROUTE4 cell here and add mapping for this hop
-            opposite = {'E':'W','W':'E','N':'S','S':'N'}[direction]
-            cell, created = self._add_or_merge_route4(x, y, out_dir=direction, in_pin=opposite, upstream=prev_src)
+            # For intermediate hops, pass-through toward next cell. For the last hop, point toward dst.
+            if idx + 1 < len(hops):
+                out_dir = dir_from_delta(hops[idx+1][0] - x, hops[idx+1][1] - y)
+            else:
+                out_dir = dir_to_dst
+            in_pin = {'E':'W','W':'E','N':'S','S':'N'}[direction]
+            cell, created = self._add_or_merge_route4(x, y, out_dir=out_dir, in_pin=in_pin, upstream=prev_src)
             if created:
                 cells.append(cell)
-            prev_src = {"type": "cell", "x": x, "y": y, "out": pin_map[direction]}
-            last_dir = direction
+            prev_src = {"type": "cell", "x": x, "y": y, "out": pin_map[out_dir]}
+            last_dir = out_dir
             cur = nxt
+
         # At this point, cur is adjacent to dst, and last_dir points towards dst
         return cells, last_dir, cur
 
@@ -235,6 +250,35 @@ class ManhattanRouter:
             luts[i] |= rl[i]
         cell.params['luts'] = luts
         return cell, False
+
+    def _can_add_or_merge_route4(self, x: int, y: int, out_dir: str, in_pin: str, upstream: Dict) -> bool:
+        """Dry-run feasibility check for adding/merging a mapping (out_dir <- in_pin) at (x,y).
+        Returns True if the operation would succeed without conflicting assignments; False otherwise.
+        """
+        pin_map = {'N':0,'E':1,'S':2,'W':3}
+        out_idx = pin_map[out_dir]
+        in_idx = pin_map[in_pin]
+        cell = self._route_cells.get((x, y))
+        if cell is None:
+            # Would create a fresh ROUTE4; allowed
+            return True
+        if cell.op != 'ROUTE4':
+            return False
+        luts = [int(v) for v in cell.params.get('luts', [0,0,0,0])]
+        if luts[out_idx] != 0:
+            expected = route_luts(out_dir, in_pin)[out_idx]
+            if luts[out_idx] != expected:
+                return False
+            # If output mapping matches, ensure input pin is same upstream
+            cur_in = cell.inputs[in_idx]
+            if cur_in.get('type') == 'const' and int(cur_in.get('value',0)) == 0:
+                return True
+            return cur_in == upstream
+        # Output is free; check input pin compatibility
+        cur_in = cell.inputs[in_idx]
+        if cur_in.get('type') == 'const' and int(cur_in.get('value',0)) == 0:
+            return True
+        return cur_in == upstream
 
     def wire_from_edge_to(self, side: str, pos: int, dst_cell: Tuple[int,int], extra_hops: int = 0) -> Tuple[List[Cell], str, Tuple[int,int], int]:
         """Route from a physical edge location into the grid, stopping adjacent to dst.
@@ -606,9 +650,21 @@ class ManhattanRouter:
                 if not placed:
                     break
 
-        # Compute core route
+        # Compute core route; avoid using already-occupied out directions on existing route cells
+        initial_avoid: set = set()
+        for (rx, ry), rcell in list(self._route_cells.items()):
+            if rcell.op != 'ROUTE4':
+                continue
+            luts_used = [int(v) for v in rcell.params.get('luts', [0,0,0,0])]
+            for dname, idx in (('N',0),('E',1),('S',2),('W',3)):
+                if luts_used[idx] != 0:
+                    initial_avoid.add((rx, ry, dname))
+
         start_for_route = pre_hops[-1] if pre_hops else start
-        core_path = self.route(start_for_route, target)
+        try:
+            core_path = self.route(start_for_route, target, avoid_moves=initial_avoid if initial_avoid else None)
+        except RuntimeError:
+            core_path = self.route(start_for_route, target)
         path: List[Tuple[int,int]] = (pre_hops + core_path) if pre_hops else core_path
 
         cells: List[Cell] = []
@@ -623,7 +679,17 @@ class ManhattanRouter:
         prev_src = {"type":"cell","x":cur[0],"y":cur[1],"out":pin_map[out_dir_first]}
 
         # Walk the path; final hop exposes to destination edge
-        for i, nxt in enumerate(path):
+        # Build incrementally with collision-aware reroute
+        avoid_moves: set = set(initial_avoid) if initial_avoid else set()
+        i = 0
+        max_iters = 10000
+        iter_count = 0
+        collision_counts: Dict[Tuple[int,int,str], int] = {}
+        while i < len(path):
+            iter_count += 1
+            if iter_count > max_iters:
+                raise RuntimeError('wire_edge_to_edge: exceeded iteration budget while routing (possible deadlock)')
+            nxt = path[i]
             dx = nxt[0] - cur[0]
             dy = nxt[1] - cur[1]
             if dx == 1:
@@ -637,17 +703,82 @@ class ManhattanRouter:
             else:
                 raise RuntimeError('Non-adjacent hop encountered')
             x, y = nxt
+            # Incoming pin is opposite of the direction we arrived from
+            in_pin = {'E':'W','W':'E','N':'S','S':'N'}[direction]
+            # Outgoing direction: toward the next hop, or to the destination edge on the last hop
             if i == len(path) - 1:
                 out_dir = side_dst
-                in_pin = {'E':'W','W':'E','N':'S','S':'N'}[side_dst]
             else:
-                out_dir = direction
-                in_pin = {'E':'W','W':'E','N':'S','S':'N'}[direction]
-            cell, created = self._add_or_merge_route4(x, y, out_dir=out_dir, in_pin=in_pin, upstream=prev_src)
-            if created:
-                cells.append(cell)
-            prev_src = {"type":"cell","x":x,"y":y,"out":pin_map[out_dir]}
-            cur = nxt
+                nx2, ny2 = path[i+1]
+                ddx = nx2 - x
+                ddy = ny2 - y
+                if ddx == 1:
+                    out_dir = 'E'
+                elif ddx == -1:
+                    out_dir = 'W'
+                elif ddy == 1:
+                    out_dir = 'S'
+                elif ddy == -1:
+                    out_dir = 'N'
+                else:
+                    raise RuntimeError('Non-adjacent hop encountered (next)')
+            # Before committing, if this is not the last hop, ensure the next hop can also be mapped
+            if i < len(path) - 1:
+                nx2, ny2 = path[i+1]
+                # Arrival into (nx2,ny2) is from direction out_dir
+                in_pin_next = {'E':'W','W':'E','N':'S','S':'N'}[out_dir]
+                # Determine next's outgoing direction (towards next-next or to edge if it's the final cell)
+                if i + 1 == len(path) - 1:
+                    out_dir_next = side_dst
+                else:
+                    nnx, nny = path[i+2]
+                    ddx2 = nnx - nx2
+                    ddy2 = nny - ny2
+                    if ddx2 == 1:
+                        out_dir_next = 'E'
+                    elif ddx2 == -1:
+                        out_dir_next = 'W'
+                    elif ddy2 == 1:
+                        out_dir_next = 'S'
+                    elif ddy2 == -1:
+                        out_dir_next = 'N'
+                    else:
+                        raise RuntimeError('Non-adjacent hop encountered (lookahead)')
+                upstream_next = {"type":"cell","x":x,"y":y,"out":pin_map[out_dir]}
+                if not self._can_add_or_merge_route4(nx2, ny2, out_dir_next, in_pin_next, upstream_next):
+                    # Avoid using this out direction here and recompute route
+                    key = (x, y, out_dir)
+                    collision_counts[key] = collision_counts.get(key, 0) + 1
+                    if collision_counts[key] > 8:
+                        raise RuntimeError(f'Routing stuck at {(x,y)} via {out_dir}; next-hop mapping unavailable')
+                    avoid_moves.add(key)
+                    try:
+                        new_core = self.route(cur, target, avoid_moves=avoid_moves)
+                    except RuntimeError:
+                        new_core = self.route(cur, target)
+                    path = path[:i] + new_core
+                    continue
+
+            try:
+                cell, created = self._add_or_merge_route4(x, y, out_dir=out_dir, in_pin=in_pin, upstream=prev_src)
+                if created:
+                    cells.append(cell)
+                prev_src = {"type":"cell","x":x,"y":y,"out":pin_map[out_dir]}
+                cur = nxt
+                i += 1
+            except RuntimeError as e:
+                if 'already' not in str(e):
+                    raise
+                key = (x, y, out_dir)
+                collision_counts[key] = collision_counts.get(key, 0) + 1
+                if collision_counts[key] > 8:
+                    raise RuntimeError(f'Routing stuck at {(x,y)} via {out_dir}; too many collisions')
+                avoid_moves.add(key)
+                try:
+                    new_core = self.route(cur, target, avoid_moves=avoid_moves)
+                except RuntimeError:
+                    new_core = self.route(cur, target)
+                path = path[:i] + new_core
 
         return cells, len(path)
 
